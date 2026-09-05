@@ -1,0 +1,1250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta content="width=device-width, initial-scale=1.0" name="viewport">
+  <title>WeatherGPT - Conversational AI for Weather & Climate Intelligence | MoES / IMD</title>
+  <link rel="stylesheet" href="./css/style.css">
+  
+  <!-- Tailwind CSS CDN with forms & container queries -->
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  
+  <!-- Font Awesome Icons -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  
+  <!-- Google Fonts: Plus Jakarta Sans -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- MapLibre GL JS (Interactive Google Map with Rotation & Zoom) -->
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+
+  <!-- Marked.js for fast, resilient Markdown parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              50: '#eff6ff',
+              100: '#dbeafe',
+              200: '#bfdbfe',
+              500: '#2563eb',
+              600: '#1d4ed8',
+              700: '#1e40af',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Prevent window scrollbar completely: layout locked to 100vh */
+    html, body {
+      height: 100vh !important;
+      max-height: 100vh !important;
+      overflow: hidden !important;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      width: 100vw;
+      margin: 0;
+      padding: 0;
+    }
+
+    /* Custom clean scrollbars for inner scrollable panels */
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+
+    /* Pulse animations for active cyclone & alert pins */
+    @keyframes radar-pulse {
+      0% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+      }
+      70% {
+        transform: scale(1.2);
+        box-shadow: 0 0 0 14px rgba(239, 68, 68, 0);
+      }
+      100% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+      }
+    }
+
+    .pulse-danger {
+      animation: radar-pulse 2s infinite cubic-bezier(0.4, 0, 0.6, 1);
+    }
+
+    @keyframes radar-sweep {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .radar-sweep-anim {
+      transform-origin: 50% 50%;
+      animation: radar-sweep 4s linear infinite;
+    }
+
+    /* MapLibre map styles */
+    .maplibregl-canvas {
+      outline: none;
+    }
+    .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right {
+      display: none !important;
+    }
+  </style>
+</head>
+<body class="bg-[#f4f7fb] text-slate-800 font-sans h-screen w-screen flex antialiased overflow-hidden">
+
+  <!-- ======================================================== -->
+  <!-- 1. LEFT SIDEBAR: Navigation, Live 3D Map, Recent Chats   -->
+  <!-- ======================================================== -->
+  <aside class="bg-white border-r border-slate-200/80 flex flex-col justify-between shrink-0 h-screen sticky top-0 z-30 overflow-y-auto w-[420px] xl:w-[460px] 2xl:w-[480px] min-h-0" data-purpose="navigation-sidebar">
+    <div class="flex flex-col">
+      <!-- Brand & MoES/IMD Attribution -->
+      <div class="p-5 pb-4 flex items-center gap-3 border-b border-slate-100">
+        <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-sky-400 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
+          <i class="fa-solid fa-cloud-bolt text-lg"></i>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="font-bold text-lg leading-tight tracking-tight text-slate-900">WeatherGPT</h1>
+          </div>
+          <p id="brand-sub-title" class="text-[11px] text-slate-400 font-medium">Ministry of Earth Sciences • IMD</p>
+        </div>
+      </div>
+
+      <!-- Action: New Chat -->
+      <div class="p-4 pb-2">
+        <button id="new-chat-btn" class="w-full bg-blue-600 hover:bg-blue-700 active:scale-[0.98] transition-all text-white font-medium py-2.5 px-4 rounded-xl flex items-center justify-center gap-2.5 shadow-sm shadow-blue-600/30">
+          <i class="fa-solid fa-plus text-sm"></i>
+          <span>New Chat</span>
+        </button>
+      </div>
+
+      <!-- Primary Navigation Links -->
+      <nav class="px-3 py-2 space-y-1">
+        <a id="nav-chat" href="#chat" class="nav-link active-nav-tab flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-blue-600 bg-blue-50/70 font-semibold text-sm transition-colors">
+          <i class="fa-regular fa-comment-dots text-base w-5 text-center"></i>
+          <span>Chat</span>
+        </a>
+        <a id="nav-drought" href="#drought" class="nav-link flex items-center justify-between px-3.5 py-2.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 text-sm font-medium transition-colors">
+          <div class="flex items-center gap-3">
+            <i class="fa-solid fa-wheat-awn text-base w-5 text-center text-amber-600"></i>
+            <span>Drought & Agro Watch</span>
+          </div>
+          
+        </a>
+        <a id="nav-alerts" href="#alerts" class="nav-link flex items-center justify-between px-3.5 py-2.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 text-sm font-medium transition-colors">
+          <div class="flex items-center gap-3">
+            <i class="fa-solid fa-triangle-exclamation text-base w-5 text-center text-amber-500"></i>
+            <span>Alerts & Warnings</span>
+          </div>
+          <span id="nav-alert-dot" class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+        </a>
+        <a id="nav-climate" href="#climate" class="nav-link flex items-center justify-between px-3.5 py-2.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 text-sm font-medium transition-colors">
+          <div class="flex items-center gap-3">
+            <i class="fa-solid fa-leaf text-base w-5 text-center text-emerald-500"></i>
+            <span>Climate Insights</span>
+          </div>
+         
+        </a>
+        <a id="nav-disaster" href="#disaster" class="nav-link flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 text-sm font-medium transition-colors">
+          <i class="fa-solid fa-shield-halved text-base w-5 text-center text-slate-400"></i>
+          <span>Disaster Info</span>
+        </a>
+        <a id="nav-saved" href="#saved" class="nav-link flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 text-sm font-medium transition-colors">
+          <i class="fa-regular fa-bookmark text-base w-5 text-center text-slate-400"></i>
+          <span>Saved Locations</span>
+        </a>
+      </nav>
+
+      <!-- BEGIN: Real Google Map Style Embedded Widget -->
+      <div class="px-3.5 pt-2 pb-1" data-purpose="google-map-sidebar-widget">
+        <div class="rounded-2xl overflow-hidden border border-slate-300 shadow-md bg-[#0b172a] relative group">
+          
+          <!-- Top Left Pills -->
+          <div class="absolute top-2 left-2 z-20 flex items-center gap-1.5">
+            <button id="btn-toggle-layers-sidebar" class="bg-slate-900/85 hover:bg-slate-900 text-white backdrop-blur px-2.5 py-1 rounded-full text-[11px] font-medium flex items-center gap-1.5 border border-white/10 shadow-sm transition">
+              <i class="fa-solid fa-layer-group text-[10px] text-sky-400"></i>
+              <span id="layer-label-sidebar">Satellite</span>
+            </button>
+
+          </div>
+
+          <!-- Top-Right Actions: Compass & Expand Fullscreen Map -->
+          <div class="absolute top-2 right-2 z-20 flex items-center gap-1.5">
+            <button id="btn-compass-sidebar" class="w-6 h-6 rounded-full bg-slate-900/80 hover:bg-slate-800 text-white backdrop-blur flex items-center justify-center border border-white/10 text-[10px] transition" title="Reset North">
+              <i class="fa-regular fa-compass text-rose-400" id="compass-icon-sidebar"></i>
+            </button>
+            <button id="btn-expand-map" class="w-6 h-6 rounded-full bg-slate-900/80 hover:bg-slate-800 text-white backdrop-blur flex items-center justify-center border border-white/10 text-[10px] transition" title="Open Fullscreen Weather Map">
+              <i class="fa-solid fa-up-right-and-down-left-from-center"></i>
+            </button>
+          </div>
+
+          <!-- Real MapLibre GL 3D Map Container (Rotatable, Zoomable, 3D Tilt) -->
+          <div id="sidebar-map-container" class="relative h-[310px] w-full bg-[#0b1c3d]"></div>
+
+          <!-- Floating Map Controls (Right Edge: Zoom In, Zoom Out, 3D, Rotate, GPS) -->
+          <div class="absolute right-2 top-10 z-20 flex flex-col items-center bg-slate-900/85 backdrop-blur rounded-lg border border-white/10 shadow-lg overflow-hidden">
+            <button id="btn-zoom-in-sidebar" class="w-6 h-6 flex items-center justify-center text-slate-200 hover:text-white hover:bg-slate-800 text-[11px] border-b border-white/10" title="Zoom in">
+              <i class="fa-solid fa-plus"></i>
+            </button>
+            <button id="btn-zoom-out-sidebar" class="w-6 h-6 flex items-center justify-center text-slate-200 hover:text-white hover:bg-slate-800 text-[11px] border-b border-white/10" title="Zoom out">
+              <i class="fa-solid fa-minus"></i>
+            </button>
+            <button id="btn-toggle-3d-sidebar" class="w-6 h-6 flex items-center justify-center text-slate-200 hover:text-white hover:bg-slate-800 text-[10px] border-b border-white/10" title="Toggle 3D Perspective">
+              <i class="fa-solid fa-cube text-[10px]"></i>
+            </button>
+            <button id="btn-rotate-sidebar" class="w-6 h-6 flex items-center justify-center text-slate-200 hover:text-white hover:bg-slate-800 text-[10px] border-b border-white/10" title="Rotate Map 45°">
+              <i class="fa-solid fa-rotate-right text-[10px]"></i>
+            </button>
+            <button id="btn-center-gps-sidebar" class="w-6 h-6 flex items-center justify-center text-sky-400 hover:text-sky-300 hover:bg-slate-800 text-[10px]" title="Center New Delhi (IMD HQ)">
+              <i class="fa-solid fa-location-crosshairs"></i>
+            </button>
+          </div>
+
+          <!-- Weather Map Location Footer (Center: Google Maps, Left: Real-time Coordinates on Hover) -->
+          <div class="absolute bottom-0 inset-x-0 bg-slate-950/90 backdrop-blur-sm border-t border-white/10 px-2 py-1.5 flex items-center justify-between text-[10px] text-slate-300 z-20">
+            <div class="flex items-center gap-1.5 font-medium truncate flex-1 min-w-0">
+              <i class="fa-solid fa-crosshairs text-sky-400 text-[10px] shrink-0"></i>
+              <span id="sidebar-map-coords" class="text-slate-200 font-mono text-[10px] truncate tracking-tight">22.5726° N, 88.3639° E</span>
+            </div>
+            <div class="flex items-center justify-center gap-0.5 px-2 font-medium text-[10px] shrink-0 border-x border-white/10 mx-1">
+              <span class="text-[#4285F4] font-bold">G</span><span class="text-[#EA4335] font-bold">o</span><span class="text-[#FBBC05] font-bold">o</span><span class="text-[#4285F4] font-bold">g</span><span class="text-[#34A853] font-bold">l</span><span class="text-[#EA4335] font-bold">e</span>
+              <span class="text-slate-300 font-normal ml-0.5">Maps</span>
+            </div>
+            <div class="flex items-center justify-end text-[9px] text-slate-400 shrink-0 flex-1 min-w-0">
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- END: Embedded Map Widget -->
+    </div>
+
+    <!-- Recent Chats Section (Stored in SQLite Database) -->
+    <div class="px-4 py-3 border-t border-slate-100">
+      <div class="flex items-center justify-between text-xs text-slate-400 uppercase font-semibold mb-2 tracking-wider">
+        <div class="flex items-center gap-1.5">
+          <i class="fa-regular fa-clock text-[11px]"></i>
+          <span id="heading-recent-chats">Recent Chats</span>
+        </div>
+        <button id="btn-clear-recent-chats" class="text-[11px] font-semibold text-rose-500 hover:text-rose-700 hover:underline capitalize tracking-normal transition" title="Clear all recent chats">Clear all</button>
+      </div>
+      <div class="space-y-1.5 text-xs max-h-48 overflow-y-auto" id="recent-chats-list">
+        <!-- Dynamically loaded from SQLite /api/conversations -->
+      </div>
+    </div>
+  </aside>
+
+  <!-- ======================================================== -->
+  <!-- 2. CENTER MAIN WORKSPACE: Header, Chat, Fixed Input Bar  -->
+  <!-- ======================================================== -->
+  <main class="flex-1 flex flex-col h-screen overflow-hidden min-w-0 bg-[#f4f7fb]">
+    
+    <!-- Top Header Bar -->
+    <header class="h-16 bg-white border-b border-slate-200/80 px-6 flex items-center justify-between shrink-0 z-20" data-purpose="top-nav">
+      <!-- Search input with autocomplete dropdown -->
+      <div class="relative flex-1 max-w-md">
+        <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+        <input id="global-search" type="text" placeholder="Search location" class="w-full pl-9 pr-4 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 placeholder:text-slate-400">
+        
+        <!-- Search Autocomplete Dropdown -->
+        <div id="search-autocomplete-dropdown" class="absolute top-full left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-2xl shadow-2xl max-h-[420px] overflow-y-auto z-50 hidden"></div>
+      </div>
+
+      <!-- Top Right Controls: City Selector, Geolocation & Language Toggle -->
+      <div class="flex items-center gap-2.5">
+        <!-- Current Active Location Badge & Selector -->
+        <button id="btn-city-dropdown" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-semibold hover:bg-slate-50 transition text-slate-700 shadow-sm" title="Change or Search Location">
+          <i class="fa-solid fa-location-dot text-blue-600 text-xs"></i>
+          <span id="nav-city-label">Detecting location...</span>
+          <i class="fa-solid fa-chevron-down text-[10px] text-slate-400 ml-0.5"></i>
+        </button>
+
+        <!-- Use GPS / My Location Quick Button -->
+        <button id="btn-use-gps" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-blue-50 border border-blue-200/80 text-blue-700 hover:bg-blue-100 text-xs font-semibold transition shadow-sm" title="Detect My Current Location">
+          <i class="fa-solid fa-location-crosshairs text-blue-600"></i>
+          <span class="hidden sm:inline">Use My Location</span>
+        </button>
+
+
+        <!-- Language Dropdown Menu (English, Hindi, Bangla) -->
+        <div class="relative" id="language-dropdown-wrapper">
+          <button id="btn-language-dropdown" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold border border-slate-200 rounded-xl bg-white text-slate-700 hover:bg-slate-50 hover:border-slate-300 shadow-sm transition">
+            <i class="fa-solid fa-language text-blue-600 text-sm"></i>
+            <span id="lang-label">English (EN)</span>
+            <i class="fa-solid fa-chevron-down text-[10px] text-slate-400 ml-0.5 transition-transform" id="lang-chevron"></i>
+          </button>
+          <div id="language-menu" class="absolute right-0 top-full mt-1.5 w-44 bg-white border border-slate-200 rounded-xl shadow-xl py-1 z-50 hidden transition">
+            <button class="lang-option w-full text-left px-3.5 py-2 text-xs font-medium hover:bg-blue-50 flex items-center justify-between text-slate-700 transition" data-lang="en">
+              <span class="flex items-center gap-2">English</span>
+              <span class="text-[10px] text-slate-400 font-mono">EN</span>
+            </button>
+            <button class="lang-option w-full text-left px-3.5 py-2 text-xs font-medium hover:bg-blue-50 flex items-center justify-between text-slate-700 transition" data-lang="hi">
+              <span class="flex items-center gap-2"> हिन्दी (Hindi)</span>
+              <span class="text-[10px] text-slate-400 font-mono">HI</span>
+            </button>
+            <button class="lang-option w-full text-left px-3.5 py-2 text-xs font-medium hover:bg-blue-50 flex items-center justify-between text-slate-700 transition" data-lang="bn">
+              <span class="flex items-center gap-2">বাংলা (Bangla)</span>
+              <span class="text-[10px] text-slate-400 font-mono">BN</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- 2-3s Translation Progress Toast Notification -->
+    <div id="translation-toast" class="hidden fixed top-20 left-1/2 -translate-x-1/2 bg-slate-900/90 text-white backdrop-blur px-4 py-2.5 rounded-xl text-xs font-medium shadow-2xl z-50 flex items-center gap-2.5 border border-white/10 transition-all duration-300">
+      <i id="translation-toast-icon" class="fa-solid fa-arrows-rotate animate-spin text-blue-400 text-sm"></i>
+      <span id="translation-toast-text">Converting...</span>
+    </div>
+
+    <!-- Scrollable Workspace: Chat Thread -->
+    <div id="chat-scroll-container" class="flex-1 overflow-y-auto px-4 md:px-8 pt-4 pb-6 min-h-0 scroll-smooth">
+      <div class="max-w-[540px] mx-auto w-full space-y-5" data-purpose="chat-thread-container">
+        
+        <!-- Welcome Banner & Suggested Quick Pills -->
+        <div id="chat-welcome-banner" class="text-center py-4">
+          <h2 class="text-2xl font-bold text-slate-900 tracking-tight">Hello! I'm <span class="text-blue-600">WeatherGPT</span> 👋</h2>
+          <p class="text-slate-500 text-sm mt-1">Ask me anything about weather, Humidity, AQI etc.!</p>
+          
+          <!-- Prompt Pill Suggestions -->
+          <div class="flex flex-wrap items-center justify-center gap-2 mt-4">
+            <button class="prompt-pill px-3.5 py-1.5 bg-white border border-slate-200 hover:border-blue-400 hover:bg-blue-50/50 rounded-xl text-xs font-medium text-slate-700 transition flex items-center gap-1.5 shadow-sm" data-prompt="What is the current weather observation in Kolkata?">
+              <span>🌦</span> Weather in my location
+            </button>
+            <button class="prompt-pill px-3.5 py-1.5 bg-white border border-slate-200 hover:border-blue-400 hover:bg-blue-50/50 rounded-xl text-xs font-medium text-slate-700 transition flex items-center gap-1.5 shadow-sm" data-prompt="Will it rain this weekend? Show precipitation forecast.">
+              <span>🌧</span> Rain forecast this weekend
+            </button>
+            <button class="prompt-pill px-3.5 py-1.5 bg-white border border-slate-200 hover:border-blue-400 hover:bg-blue-50/50 rounded-xl text-xs font-medium text-slate-700 transition flex items-center gap-1.5 shadow-sm" data-prompt="Are there any active cyclone alerts or squally wind warnings along Indian coasts?">
+              <span>🌀</span> Cyclone alerts in India
+            </button>
+            <button class="prompt-pill px-3.5 py-1.5 bg-white border border-slate-200 hover:border-blue-400 hover:bg-blue-50/50 rounded-xl text-xs font-medium text-slate-700 transition flex items-center gap-1.5 shadow-sm" data-prompt="Show 7-day temperature trends and heatwave outlook.">
+              <span>🌡</span> Temperature trend this week
+            </button>
+          </div>
+        </div>
+
+        <!-- Chat History Stream -->
+        <div id="chat-messages-container" class="space-y-5 pb-8">
+          <!-- Dynamically populated messages -->
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Solid Bottom Chat Input Bar (Completely separate from scroll area so messages never bleed under) -->
+    <div class="shrink-0 bg-[#f4f7fb] border-t border-slate-200/80 px-4 md:px-8 pt-3 pb-3 z-20">
+      <div class="max-w-[540px] mx-auto w-full">
+        <div class="bg-white rounded-2xl border border-slate-300 shadow-md p-2 flex items-center gap-2">
+          <!-- File attachment symbol removed as requested by user -->
+          <input id="chat-input" type="text" placeholder="Ask anything about weather, satellite bulletins, radar forecasts..." class="flex-1 border-0 focus:ring-0 text-sm text-slate-800 placeholder:text-slate-400 bg-transparent px-3 outline-none">
+          <button id="btn-voice-mic" class="w-9 h-9 rounded-xl text-slate-400 hover:text-blue-600 hover:bg-slate-100 flex items-center justify-center transition" title="Voice Input">
+            <i class="fa-solid fa-microphone"></i>
+          </button>
+          <button id="btn-send-message" class="h-9 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-medium text-sm flex items-center justify-center gap-1.5 shadow-sm transition">
+            <span>Send</span>
+            <i class="fa-regular fa-paper-plane text-xs"></i>
+          </button>
+        </div>
+        <p id="chat-disclaimer-text" class="text-center text-[10px] text-slate-400 mt-1.5">
+          WeatherGPT integrates IMD synoptic datasets, Numerical Weather Prediction (NWP) models & OpenAI. Verify disaster alerts with local authorities.
+        </p>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ======================================================== -->
+  <!-- 3. RIGHT INTELLIGENCE PANEL: Google Login, Cards, Alerts -->
+  <!-- ======================================================== -->
+  <aside class="w-[440px] xl:w-[480px] 2xl:w-[520px] bg-white border-l border-slate-200/80 shrink-0 h-screen sticky top-0 overflow-y-auto p-5 space-y-6 min-h-0" data-purpose="weather-intelligence-panel">
+    
+    <!-- User Profile Header with Account -->
+    <div class="flex items-center justify-between pb-3 border-b border-slate-100" id="user-profile-header">
+      <div id="btn-google-login" class="flex items-center gap-2.5 cursor-pointer group" title="Account">
+        <div id="user-avatar-badge" class="w-9 h-9 rounded-xl bg-blue-600 text-white font-semibold text-sm flex items-center justify-center shadow-sm group-hover:scale-105 transition">
+          <i class="fa-regular fa-user text-sm"></i>
+        </div>
+        <div>
+          <p id="user-display-name" class="text-xs font-bold text-slate-800 leading-tight group-hover:text-blue-600 transition">User Profile</p>
+          <p id="user-account-sub" class="text-[11px] text-blue-600 font-medium">Account</p>
+        </div>
+      </div>
+      <div class="flex items-center">
+        <button id="btn-open-settings" class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition" title="Help & Setting">
+          <i class="fa-solid fa-gear text-sm"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Card 1: Current Weather Detailed Status -->
+    <div class="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm" data-purpose="current-weather-card">
+      <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center gap-2">
+          <h3 id="card-current-heading" class="font-bold text-slate-900 text-sm">Current Weather</h3>
+          <span id="card-live-clock" class="text-[10px] font-mono text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full flex items-center gap-1 border border-emerald-200">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>Live • <span id="live-clock-time">--:--:--</span>
+          </span>
+        </div>
+        <div class="flex items-center gap-1 text-slate-700">
+          <span id="card-city-name" class="text-xs font-semibold text-slate-700">Kolkata</span>
+        </div>
+      </div>
+
+      <!-- Temperature & Condition Hero -->
+      <div class="flex items-center justify-between my-3">
+        <div>
+          <div class="flex items-baseline">
+            <span id="card-temp-num" class="text-4xl font-extrabold text-slate-900 tracking-tight">34</span>
+            <span id="card-temp-unit" class="text-xl font-bold text-slate-600">°C</span>
+          </div>
+          <p id="card-cond-desc" class="text-sm font-semibold text-slate-700 mt-0.5">Sunny</p>
+          <p class="text-xs text-slate-400"><span id="card-feels-label">Feels like</span> <span id="card-feels-num">36</span><span id="card-feels-unit">°C</span></p>
+        </div>
+        <div id="card-icon-wrapper" class="w-16 h-16 rounded-2xl bg-amber-50 flex items-center justify-center text-amber-500 text-3xl shadow-inner">
+          <span id="card-weather-emoji">☀️</span>
+        </div>
+      </div>
+
+      <!-- Key Metrics Grid (Humidity, Wind, Pressure, Visibility, UV Index) -->
+      <div class="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100 text-xs">
+        <div class="bg-slate-50 p-2.5 rounded-xl">
+          <span id="lbl-humidity" class="text-slate-400 block text-[11px]">Humidity</span>
+          <span id="card-humidity-val" class="font-bold text-slate-800 text-sm">--%</span>
+        </div>
+        <div class="bg-slate-50 p-2.5 rounded-xl">
+          <span id="lbl-wind" class="text-slate-400 block text-[11px]">Wind</span>
+          <span id="card-wind-val" class="font-bold text-slate-800 text-sm">-- km/h</span>
+        </div>
+        <div class="bg-slate-50 p-2.5 rounded-xl">
+          <span id="lbl-pressure" class="text-slate-400 block text-[11px]">Pressure</span>
+          <span id="card-pressure-val" class="font-bold text-slate-800 text-sm">-- hPa</span>
+        </div>
+        <div class="bg-slate-50 p-2.5 rounded-xl">
+          <span id="lbl-visibility" class="text-slate-400 block text-[11px]">Visibility</span>
+          <span id="card-visibility-val" class="font-bold text-slate-800 text-sm">10 km</span>
+        </div>
+        <div class="bg-slate-50 p-2.5 rounded-xl col-span-2 flex items-center justify-between">
+          <div>
+            <span class="text-slate-400 block text-[11px]">UV Radiation Index</span>
+            <span id="card-uv-val" class="font-bold text-amber-600 text-sm">5.0 (Moderate)</span>
+          </div>
+          <i class="fa-solid fa-sun text-amber-400 text-lg"></i>
+        </div>
+      </div>
+
+      <!-- AQI Badge -->
+      <div class="mt-3 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200/60 flex items-center justify-between text-xs">
+        <span id="lbl-aqi" class="text-emerald-800 font-semibold">Air Quality (AQI)</span>
+        <span id="card-aqi-pill" class="font-bold text-emerald-700 bg-emerald-200/60 px-2 py-0.5 rounded-md">Good (48)</span>
+      </div>
+
+      <!-- Small Coordinates Tab (Latitude & Longitude) -->
+      <div id="card-coordinates-tab" class="mt-2.5 px-3 py-2 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between text-xs" data-purpose="card-coordinates-tab">
+        <div class="flex items-center gap-1.5 font-medium text-slate-500 text-[11px]">
+          <i class="fa-solid fa-compass text-blue-500 text-xs"></i>
+          <span>Coordinates</span>
+        </div>
+        <span id="card-coordinates-val" class="font-mono font-semibold text-[11px] text-slate-700">22.5726° N, 88.3639° E</span>
+      </div>
+    </div>
+
+    <!-- Card 1.5: 24-Hour Forecast Timeline -->
+    <div class="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm" data-purpose="hourly-forecast-card">
+      <div class="flex items-center justify-between mb-2.5">
+        <div class="flex items-center gap-1.5 text-blue-600">
+          <i class="fa-regular fa-clock text-xs"></i>
+          <h3 id="card-hourly-heading" class="font-bold text-slate-900 text-sm">Hourly Forecast (24h)</h3>
+        </div>
+        <span class="text-[10px] bg-blue-50 text-blue-700 font-semibold px-2 py-0.5 rounded-full border border-blue-100">Live 24h</span>
+      </div>
+      <div id="hourly-forecast-strip" class="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
+        <!-- Injected dynamically by WeatherUI.renderHourly -->
+      </div>
+    </div>
+
+    <!-- Card 2: 5-Day Forecast Breakdown -->
+    <div class="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm" data-purpose="five-day-forecast-card">
+      <div class="flex items-center justify-between mb-3">
+        <h3 id="card-forecast-heading" class="font-bold text-slate-900 text-sm">5-Day Forecast</h3>
+       
+      </div>
+      <div id="right-forecast-list" class="space-y-3 text-xs">
+        <!-- Injected dynamically -->
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ======================================================== -->
+  <!-- 4. MODALS & INTERACTIVE OVERLAYS                         -->
+  <!-- ======================================================== -->
+
+  <!-- Modal 1: Fullscreen Weather Map Explorer -->
+  <div id="modal-map" class="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-3xl overflow-hidden shadow-2xl w-full max-w-6xl h-[85vh] flex flex-col">
+      <!-- Top Modal Bar -->
+      <div class="p-3.5 px-5 bg-slate-950/90 border-b border-white/10 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <i class="fa-solid fa-earth-americas text-sky-400 text-lg"></i>
+          <h3 class="text-white font-bold text-sm">Weather Map & Earth Radar Explorer</h3>
+        </div>
+        
+        <!-- Center Layer Switches (Google Maps Terrain, Satellite Hybrid) -->
+        <div class="flex items-center gap-1.5 bg-slate-800/80 p-1 rounded-xl border border-white/10 text-xs">
+          <button id="btn-layer-terrain" class="px-3 py-1 rounded-lg bg-blue-600 text-white font-medium transition">⛰️ Google Terrain</button>
+          <button id="btn-layer-satellite" class="px-3 py-1 rounded-lg text-slate-300 hover:text-white transition">🛰️ Satellite Hybrid</button>
+        </div>
+
+        <!-- Close Button -->
+        <button class="modal-close w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-white flex items-center justify-center transition" data-target="modal-map">
+          ✕
+        </button>
+      </div>
+
+      <!-- Main 3D Map Area -->
+      <div class="flex-1 relative overflow-hidden">
+        <div id="fullscreen-map-container" class="w-full h-full bg-[#051329]"></div>
+
+        <!-- Floating 3D Controls on Map -->
+        <div class="absolute right-4 top-4 z-20 flex flex-col items-center bg-slate-900/90 backdrop-blur rounded-xl border border-white/15 shadow-2xl overflow-hidden text-xs">
+          <button id="btn-fs-zoom-in" class="w-9 h-9 flex items-center justify-center text-white hover:bg-slate-800 border-b border-white/10" title="Zoom in">
+            <i class="fa-solid fa-plus"></i>
+          </button>
+          <button id="btn-fs-zoom-out" class="w-9 h-9 flex items-center justify-center text-white hover:bg-slate-800 border-b border-white/10" title="Zoom out">
+            <i class="fa-solid fa-minus"></i>
+          </button>
+          <button id="btn-fs-rotate-left" class="w-9 h-9 flex items-center justify-center text-white hover:bg-slate-800 border-b border-white/10" title="Rotate Left">
+            <i class="fa-solid fa-rotate-left"></i>
+          </button>
+          <button id="btn-fs-rotate-right" class="w-9 h-9 flex items-center justify-center text-white hover:bg-slate-800 border-b border-white/10" title="Rotate Right">
+            <i class="fa-solid fa-rotate-right"></i>
+          </button>
+          <button id="btn-fs-tilt-up" class="w-9 h-9 flex items-center justify-center text-white hover:bg-slate-800 border-b border-white/10 font-bold" title="Tilt 3D Perspective">
+            <i class="fa-solid fa-cube text-xs"></i>
+          </button>
+          <button id="btn-fs-compass" class="w-9 h-9 flex items-center justify-center text-rose-400 hover:bg-slate-800 border-b border-white/10" title="Reset North">
+            <i class="fa-regular fa-compass text-sm"></i>
+          </button>
+          <button id="btn-fs-gps" class="w-9 h-9 flex items-center justify-center text-sky-400 hover:bg-slate-800" title="Center Current Location">
+            <i class="fa-solid fa-location-crosshairs"></i>
+          </button>
+        </div>
+
+        <!-- Real-time Coordinates HUD on Hover -->
+        <div class="absolute bottom-3 left-3 z-20 bg-slate-950/85 backdrop-blur px-3 py-1.5 rounded-xl border border-white/15 text-xs text-slate-200 flex items-center gap-2 shadow-lg font-mono">
+          <i class="fa-solid fa-crosshairs text-sky-400 text-xs"></i>
+          <span id="fs-coords-hud" class="font-semibold text-white">22.5726° N, 88.3639° E</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 2: Account Sync Modal -->
+  <div id="modal-google-login" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-100 space-y-4">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-sm shadow-sm">
+            <i class="fa-regular fa-user"></i>
+          </div>
+          <h3 class="font-bold text-base text-slate-900">Account</h3>
+        </div>
+        <button class="modal-close text-slate-400 hover:text-slate-700 text-lg" data-target="modal-google-login">✕</button>
+      </div>
+
+      <!-- Quick Sync Input -->
+      <div class="space-y-3 pt-1">
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">Your Name</label>
+          <input id="input-google-name" type="text" placeholder="Your Name" value="" class="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">Email Address</label>
+          <input id="input-google-email" type="email" placeholder="name@example.com" value="" class="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none">
+        </div>
+        <button id="btn-sync-google-account" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-xl text-xs shadow-sm transition">
+          Confirm Account
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 3: Alerts & Warnings National Overview -->
+  <div id="modal-alerts" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl p-6 max-w-2xl w-full shadow-2xl border border-slate-100 max-h-[85vh] flex flex-col">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div class="flex items-center gap-2 text-rose-600">
+          <i class="fa-solid fa-triangle-exclamation text-base"></i>
+          <h3 class="font-bold text-base text-slate-900">National Weather & Disaster Bulletins (IMD)</h3>
+        </div>
+        <button class="modal-close text-slate-400 hover:text-slate-700 text-lg" data-target="modal-alerts">✕</button>
+      </div>
+      <div id="modal-alerts-content" class="flex-1 overflow-y-auto py-4 space-y-3">
+        <!-- Injected dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 4: Drought Monitoring & Agro Outlook (IMD / CWC) -->
+  <div id="modal-drought" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl p-6 max-w-2xl w-full shadow-2xl border border-slate-100 max-h-[85vh] flex flex-col">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div class="flex items-center gap-2.5 text-amber-600">
+          <i class="fa-solid fa-wheat-awn text-lg"></i>
+          <div>
+            <h3 class="font-bold text-base text-slate-900">🌾 National Drought & Agricultural Soil Moisture Watch</h3>
+            <p class="text-[11px] text-slate-400">Standardised Precipitation Index (SPI) & IMD Aridity Telemetry</p>
+          </div>
+        </div>
+        <button class="modal-close text-slate-400 hover:text-slate-700 text-lg transition" data-target="modal-drought">✕</button>
+      </div>
+
+      <div id="modal-drought-content" class="flex-1 overflow-y-auto py-4 space-y-3.5 text-xs">
+        <!-- Overview Cards -->
+        <div class="grid grid-cols-3 gap-2.5">
+          <div class="p-3 bg-emerald-50 border border-emerald-200/80 rounded-2xl">
+            <span class="text-slate-500 block text-[10px] uppercase font-bold tracking-wider">All-India Aridity</span>
+            <p class="text-xl font-extrabold text-emerald-800 mt-0.5">Normal</p>
+            <p class="text-[10px] text-emerald-600 mt-1">92% subdivisions stress-free</p>
+          </div>
+          <div class="p-3 bg-blue-50 border border-blue-200/80 rounded-2xl">
+            <span class="text-slate-500 block text-[10px] uppercase font-bold tracking-wider">150 CWC Reservoirs</span>
+            <p class="text-xl font-extrabold text-blue-800 mt-0.5">78% FRL</p>
+            <p class="text-[10px] text-blue-600 mt-1">+12% vs 10-year average</p>
+          </div>
+          <div class="p-3 bg-amber-50 border border-amber-200/80 rounded-2xl">
+            <span class="text-slate-500 block text-[10px] uppercase font-bold tracking-wider">Dry Pockets Watch</span>
+            <p class="text-xl font-extrabold text-amber-800 mt-0.5">4 Subdivs</p>
+            <p class="text-[10px] text-amber-600 mt-1">Rayalaseema & Saurashtra</p>
+          </div>
+        </div>
+
+        <!-- Detailed Subdivision Matrix -->
+        <div class="border border-slate-200 rounded-2xl overflow-hidden">
+          <div class="p-3 bg-slate-50 border-b border-slate-200 font-bold text-slate-800 flex items-center justify-between">
+            <span>Subdivisional Aridity Anomaly & Soil Moisture Matrix</span>
+            <span class="text-[10px] text-slate-400 font-normal">IMD Pune Agro-Division</span>
+          </div>
+          <div class="divide-y divide-slate-100">
+            <div class="p-3 flex items-center justify-between">
+              <div>
+                <strong class="text-slate-800">Gangetic West Bengal & Odisha</strong>
+                <p class="text-slate-500 text-[11px]">Sufficient root-zone moisture for paddy & pulses</p>
+              </div>
+              <span class="px-2.5 py-1 bg-emerald-100 text-emerald-700 font-bold rounded-lg text-[11px]">Normal (+0.2 SPI)</span>
+            </div>
+            <div class="p-3 flex items-center justify-between">
+              <div>
+                <strong class="text-slate-800">Punjab, Haryana & Western UP</strong>
+                <p class="text-slate-500 text-[11px]">Canal irrigation supported; optimal for Kharif harvest</p>
+              </div>
+              <span class="px-2.5 py-1 bg-emerald-100 text-emerald-700 font-bold rounded-lg text-[11px]">Optimal (-0.1 SPI)</span>
+            </div>
+            <div class="p-3 flex items-center justify-between">
+              <div>
+                <strong class="text-slate-800">Marathwada & Vidarbha (Maharashtra)</strong>
+                <p class="text-slate-500 text-[11px]">Adequate precipitation during August monsoon revival</p>
+              </div>
+              <span class="px-2.5 py-1 bg-emerald-100 text-emerald-700 font-bold rounded-lg text-[11px]">Normal (+0.4 SPI)</span>
+            </div>
+            <div class="p-3 flex items-center justify-between">
+              <div>
+                <strong class="text-slate-800">Rayalaseema & Interior Karnataka</strong>
+                <p class="text-slate-500 text-[11px]">Deficit soil moisture in rainfed groundnut pockets</p>
+              </div>
+              <span class="px-2.5 py-1 bg-amber-100 text-amber-800 font-bold rounded-lg text-[11px]">Mild Aridity (-1.2 SPI)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Advisory -->
+        <div class="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl text-slate-700">
+          <strong class="text-amber-900 block mb-1">🌾 IMD Agro Advisory:</strong>
+          <p class="leading-relaxed">Farmers in rain-shadow regions of southern peninsula are advised to adopt mulching and drip irrigation scheduling. Major agricultural basins in North and Central India have surplus water storage for upcoming Rabi sowing.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 5: Help & Setting (Appearance & Preferences) -->
+  <div id="modal-settings" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl p-6 max-w-xl w-full shadow-2xl border border-slate-100 space-y-4 max-h-[92vh] flex flex-col">
+      
+      <!-- Header -->
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-sm shadow-sm">
+            <i class="fa-solid fa-gear"></i>
+          </div>
+          <div>
+            <h3 class="font-bold text-base text-slate-900">Help & Setting</h3>
+          </div>
+        </div>
+        <button class="modal-close text-slate-400 hover:text-slate-700 text-lg transition" data-target="modal-settings">✕</button>
+      </div>
+
+      <!-- Navigation Tabs inside Help & Setting Modal -->
+      <div class="flex items-center gap-2 border-b border-slate-200 pb-2">
+        <button id="modal-tab-btn-appearance" class="modal-tab-btn active-modal-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 bg-blue-50 text-blue-600 border border-blue-200">
+          <i class="fa-solid fa-palette text-xs"></i>
+          <span>Appearance</span>
+        </button>
+        <button id="modal-tab-btn-thermal" class="modal-tab-btn px-3.5 py-1.5 rounded-xl text-xs font-medium text-slate-500 hover:text-slate-800 hover:bg-slate-100 border border-transparent transition flex items-center gap-1.5 shrink-0">
+          <i class="fa-solid fa-temperature-half text-xs"></i>
+          <span>Thermal Scale</span>
+        </button>
+        <button id="modal-tab-btn-help" class="modal-tab-btn px-3.5 py-1.5 rounded-xl text-xs font-medium text-slate-500 hover:text-slate-800 hover:bg-slate-100 border border-transparent transition flex items-center gap-1.5">
+          <i class="fa-solid fa-circle-question text-xs"></i>
+          <span>Help & Protocols</span>
+        </button>
+      </div>
+
+      <!-- TAB 1: Appearance (Exact Layout from User Screenshot) -->
+      <div id="modal-content-appearance" class="flex-1 overflow-y-auto space-y-4 pr-1 text-xs">
+        
+        <!-- Header from Screenshot -->
+        <div>
+          <h2 class="text-xl font-bold text-slate-900">Appearance</h2>
+          <p class="text-xs text-slate-500 mt-0.5">Configure the agent's visual theme and display preferences.</p>
+        </div>
+
+        <!-- 1. Appearance / Theme Row -->
+        <div class="space-y-1.5">
+          <span class="font-bold text-slate-800 text-xs block">Appearance</span>
+          <div class="p-3 bg-slate-50 rounded-2xl border border-slate-200/90 flex items-center justify-between">
+            <span class="font-medium text-slate-800 text-sm">Theme</span>
+            <div class="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 shadow-xs" id="theme-mode-segmented">
+              <button id="btn-theme-system" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 transition flex items-center justify-center" title="System Theme">
+                <i class="fa-solid fa-desktop text-xs"></i>
+              </button>
+              <button id="btn-theme-light" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white shadow-xs transition flex items-center justify-center" title="Light Theme">
+                <i class="fa-regular fa-sun text-xs"></i>
+              </button>
+              <button id="btn-theme-dark" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 transition flex items-center justify-center" title="Dark Theme">
+                <i class="fa-solid fa-moon text-xs"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Light Theme Controls -->
+        <div class="space-y-1.5">
+          <span class="font-bold text-slate-800 text-xs block">Light Theme</span>
+          <div class="bg-slate-50 rounded-2xl border border-slate-200/90 divide-y divide-slate-200/80 overflow-hidden">
+            <!-- Preset Row -->
+            <div class="p-3 flex items-center justify-between">
+              <span class="font-medium text-slate-800 text-xs">Preset</span>
+              <select id="select-light-preset" class="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer">
+                <option value="default-light">Default Light</option>
+                <option value="sky-blue">Sky Blue</option>
+                <option value="emerald-breeze">Emerald Breeze</option>
+                <option value="sunset-amber">Sunset Amber</option>
+                <option value="purple-royal">Purple Royal</option>
+                <option value="high-contrast-light">High Contrast</option>
+              </select>
+            </div>
+
+            <!-- Background Row -->
+            <div class="p-3 flex items-center justify-between">
+              <span class="font-medium text-slate-800 text-xs">Background</span>
+              <div class="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-2.5 py-1 shadow-2xs">
+                <input type="color" id="picker-light-bg" value="#F9F9F9" class="w-5 h-5 rounded cursor-pointer border-0 bg-transparent p-0">
+                <input type="text" id="hex-light-bg" value="#F9F9F9" maxlength="7" class="w-18 text-xs font-mono font-bold uppercase text-slate-700 bg-transparent border-0 focus:outline-none">
+              </div>
+            </div>
+
+            <!-- Foreground Row -->
+            <div class="p-3 flex items-center justify-between">
+              <span class="font-medium text-slate-800 text-xs">Foreground</span>
+              <div class="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-2.5 py-1 shadow-2xs">
+                <input type="color" id="picker-light-fg" value="#101010" class="w-5 h-5 rounded cursor-pointer border-0 bg-transparent p-0">
+                <input type="text" id="hex-light-fg" value="#101010" maxlength="7" class="w-18 text-xs font-mono font-bold uppercase text-slate-700 bg-transparent border-0 focus:outline-none">
+              </div>
+            </div>
+
+            <!-- Accent Row -->
+            <div class="p-3 flex items-center justify-between">
+              <div>
+                <span class="font-medium text-slate-800 text-xs block">Accent</span>
+                <span class="text-[10px] text-slate-400">Controls tab color, buttons & highlights</span>
+              </div>
+              <div class="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-2.5 py-1 shadow-2xs">
+                <input type="color" id="picker-light-accent" value="#007ACC" class="w-5 h-5 rounded cursor-pointer border-0 bg-transparent p-0">
+                <input type="text" id="hex-light-accent" value="#007ACC" maxlength="7" class="w-18 text-xs font-mono font-bold uppercase text-slate-700 bg-transparent border-0 focus:outline-none">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Dark Theme Controls -->
+        <div class="space-y-1.5">
+          <span class="font-bold text-slate-800 text-xs block">Dark Theme</span>
+          <div class="bg-slate-50 rounded-2xl border border-slate-200/90 divide-y divide-slate-200/80 overflow-hidden">
+            <!-- Preset Row -->
+            <div class="p-3 flex items-center justify-between">
+              <span class="font-medium text-slate-800 text-xs">Preset</span>
+              <select id="select-dark-preset" class="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer">
+                <option value="default-dark">Default Dark</option>
+                <option value="midnight-blue">Midnight Blue</option>
+                <option value="deep-charcoal">Deep Charcoal</option>
+                <option value="emerald-night">Emerald Night</option>
+                <option value="cyber-purple">Cyber Purple</option>
+                <option value="oled-black">OLED Pure Black</option>
+              </select>
+            </div>
+
+            <!-- Background Row -->
+            <div class="p-3 flex items-center justify-between">
+              <span class="font-medium text-slate-800 text-xs">Background</span>
+              <div class="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-2.5 py-1 shadow-2xs">
+                <input type="color" id="picker-dark-bg" value="#101010" class="w-5 h-5 rounded cursor-pointer border-0 bg-transparent p-0">
+                <input type="text" id="hex-dark-bg" value="#101010" maxlength="7" class="w-18 text-xs font-mono font-bold uppercase text-slate-700 bg-transparent border-0 focus:outline-none">
+              </div>
+            </div>
+
+            <!-- Foreground Row -->
+            <div class="p-3 flex items-center justify-between">
+              <span class="font-medium text-slate-800 text-xs">Foreground</span>
+              <div class="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-2.5 py-1 shadow-2xs">
+                <input type="color" id="picker-dark-fg" value="#CCCCCC" class="w-5 h-5 rounded cursor-pointer border-0 bg-transparent p-0">
+                <input type="text" id="hex-dark-fg" value="#CCCCCC" maxlength="7" class="w-18 text-xs font-mono font-bold uppercase text-slate-700 bg-transparent border-0 focus:outline-none">
+              </div>
+            </div>
+
+            <!-- Accent Row -->
+            <div class="p-3 flex items-center justify-between">
+              <div>
+                <span class="font-medium text-slate-800 text-xs block">Accent</span>
+                <span class="text-[10px] text-slate-400">Controls tab color, buttons & highlights</span>
+              </div>
+              <div class="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-2.5 py-1 shadow-2xs">
+                <input type="color" id="picker-dark-accent" value="#007ACC" class="w-5 h-5 rounded cursor-pointer border-0 bg-transparent p-0">
+                <input type="text" id="hex-dark-accent" value="#007ACC" maxlength="7" class="w-18 text-xs font-mono font-bold uppercase text-slate-700 bg-transparent border-0 focus:outline-none">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Reset to Default Button -->
+        <div class="flex items-center justify-end pt-1">
+          <button id="btn-reset-theme-colors" class="text-xs text-slate-500 hover:text-blue-600 underline font-medium transition">
+            Reset to default colors
+          </button>
+        </div>
+
+      </div>
+
+      <!-- TAB 2: Choose Thermal Scale (Temperature Unit Selection) -->
+      <div id="modal-content-thermal" class="flex-1 overflow-y-auto space-y-4 pr-1 text-xs hidden">
+        
+        <!-- Header -->
+        <div>
+          <h2 class="text-xl font-bold text-slate-900">Choose Thermal Scale</h2>
+          <p class="text-xs text-slate-500 mt-0.5">Select your preferred temperature unit for display across all weather observations and forecasts.</p>
+        </div>
+
+        <!-- Thermal Scale Option Cards / Buttons -->
+        <div class="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-slate-800 uppercase tracking-wider text-[10px] flex items-center gap-1.5">
+              <i class="fa-solid fa-temperature-three-quarters text-rose-500"></i>
+              <span>Temperature Scale</span>
+            </span>
+            <span id="active-scale-badge" class="text-[10px] bg-blue-100 text-blue-700 font-bold px-2.5 py-0.5 rounded-full">Celsius (°C) Active</span>
+          </div>
+
+          <div class="grid grid-cols-3 gap-3 pt-1">
+            <!-- Celsius Button -->
+            <button type="button" id="btn-scale-celsius" class="thermal-scale-btn p-3.5 rounded-2xl bg-white border-2 border-blue-500 text-left transition shadow-2xs hover:border-blue-400 group cursor-pointer relative" data-scale="C">
+              <div class="flex items-center justify-between mb-2">
+                <span class="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm">°C</span>
+                <span class="scale-check w-4 h-4 rounded-full bg-blue-600 text-white flex items-center justify-center text-[9px]"><i class="fa-solid fa-check"></i></span>
+              </div>
+              <strong class="text-slate-900 font-bold text-sm block">Celsius</strong>
+              <span class="text-[11px] text-slate-400 block mt-0.5">Metric (°C)</span>
+            </button>
+
+            <!-- Fahrenheit Button -->
+            <button type="button" id="btn-scale-fahrenheit" class="thermal-scale-btn p-3.5 rounded-2xl bg-white border border-slate-200 text-left transition shadow-2xs hover:border-slate-300 group cursor-pointer relative" data-scale="F">
+              <div class="flex items-center justify-between mb-2">
+                <span class="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold text-sm">°F</span>
+                <span class="scale-check w-4 h-4 rounded-full bg-blue-600 text-white hidden items-center justify-center text-[9px]"><i class="fa-solid fa-check"></i></span>
+              </div>
+              <strong class="text-slate-900 font-bold text-sm block">Fahrenheit</strong>
+              <span class="text-[11px] text-slate-400 block mt-0.5">US / Imperial (°F)</span>
+            </button>
+
+            <!-- Kelvin Button -->
+            <button type="button" id="btn-scale-kelvin" class="thermal-scale-btn p-3.5 rounded-2xl bg-white border border-slate-200 text-left transition shadow-2xs hover:border-slate-300 group cursor-pointer relative" data-scale="K">
+              <div class="flex items-center justify-between mb-2">
+                <span class="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-sm">K</span>
+                <span class="scale-check w-4 h-4 rounded-full bg-blue-600 text-white hidden items-center justify-center text-[9px]"><i class="fa-solid fa-check"></i></span>
+              </div>
+              <strong class="text-slate-900 font-bold text-sm block">Kelvin</strong>
+              <span class="text-[11px] text-slate-400 block mt-0.5">Thermodynamic (K)</span>
+            </button>
+          </div>
+
+          <div class="p-3 bg-blue-50/60 rounded-xl border border-blue-100 text-slate-600 leading-relaxed text-[11px] flex items-center gap-2">
+            <i class="fa-solid fa-circle-info text-blue-500 text-xs shrink-0"></i>
+            <span>All temperatures on your live weather platelet, hourly strip, and daily forecast will automatically adapt to your selected scale.</span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- TAB 2: Help & Warning Protocols -->
+      <div id="modal-content-help" class="flex-1 overflow-y-auto space-y-4 pr-1 text-xs hidden">
+        <div class="p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-slate-800 uppercase tracking-wider text-[10px] block">Help & Warning Protocol</span>
+           
+          </div>
+          
+          <div class="space-y-1.5">
+            <div class="p-2 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
+              <span class="font-bold text-emerald-950">🟢 Green — No Warning</span>
+              <span class="text-[11px] text-emerald-800">Normal weather, safe for travel</span>
+            </div>
+            <div class="p-2 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between">
+              <span class="font-bold text-amber-950">🟡 Yellow — Watch</span>
+              <span class="text-[11px] text-amber-800">Be aware of worsening weather</span>
+            </div>
+            <div class="p-2 bg-orange-50 border border-orange-200 rounded-xl flex items-center justify-between">
+              <span class="font-bold text-orange-950">🟠 Orange — Alert</span>
+              <span class="text-[11px] text-orange-800">Be prepared for severe impacts</span>
+            </div>
+            <div class="p-2 bg-rose-50 border border-rose-200 rounded-xl flex items-center justify-between">
+              <span class="font-bold text-rose-950">🔴 Red — Warning</span>
+              <span class="text-[11px] text-rose-800">Take immediate protective action</span>
+            </div>
+          </div>
+
+          <!-- National Helplines -->
+          <div class="pt-2 border-t border-slate-200/60">
+            <span class="font-bold text-slate-700 text-[11px] block mb-2">National Emergency Helplines:</span>
+            <div class="grid grid-cols-2 gap-2">
+              <div class="bg-white p-2 rounded-xl border border-slate-200 flex items-center justify-between">
+                <span class="text-slate-500">NDRF Control:</span>
+                <strong class="text-rose-600 font-mono">1078</strong>
+              </div>
+              <div class="bg-white p-2 rounded-xl border border-slate-200 flex items-center justify-between">
+                <span class="text-slate-500">National Emergency:</span>
+                <strong class="text-blue-600 font-mono">112</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+        <span></span>
+        <button class="modal-close text-slate-600 hover:text-slate-900 font-semibold px-4 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 transition" data-target="modal-settings">
+          Done
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Modal 6: Climate Insights & Synoptic Telemetry -->
+  <div id="modal-climate" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl p-6 max-w-2xl w-full shadow-2xl border border-slate-100 max-h-[85vh] flex flex-col">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div class="flex items-center gap-2 text-emerald-600">
+          <i class="fa-solid fa-leaf text-lg"></i>
+          <div>
+            <h3 class="font-bold text-base text-slate-900">🌱 National Climate Insights & Monsoon Diagnostics</h3>
+            <p class="text-[11px] text-slate-400"> Climate Diagnostic Bulletins & Global Teleconnections</p>
+          </div>
+        </div>
+        <button class="modal-close text-slate-400 hover:text-slate-700 text-lg transition" data-target="modal-climate">✕</button>
+      </div>
+
+      <div class="flex-1 overflow-y-auto py-4 space-y-3.5 text-xs text-slate-600">
+        
+        <!-- Top 3 Teleconnection Metrics -->
+        <div class="grid grid-cols-3 gap-2.5">
+          <div class="p-3 bg-blue-50 border border-blue-200/80 rounded-2xl">
+            <span class="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">ENSO (Niño 3.4)</span>
+            <p class="text-lg font-bold text-blue-900 mt-0.5">+0.08°C</p>
+            <p class="text-[10px] text-blue-600 font-semibold mt-0.5">Neutral ➔ La Niña Watch</p>
+          </div>
+          <div class="p-3 bg-emerald-50 border border-emerald-200/80 rounded-2xl">
+            <span class="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Indian Ocean Dipole</span>
+            <p class="text-lg font-bold text-emerald-900 mt-0.5">+0.14°C</p>
+            <p class="text-[10px] text-emerald-600 font-semibold mt-0.5">Neutral DMI Mode</p>
+          </div>
+          <div class="p-3 bg-purple-50 border border-purple-200/80 rounded-2xl">
+            <span class="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Monsoon LPA Rainfall</span>
+            <p class="text-lg font-bold text-purple-900 mt-0.5">+4.2%</p>
+            <p class="text-[10px] text-purple-600 font-semibold mt-0.5">Above Normal Season</p>
+          </div>
+        </div>
+
+        <!-- Teleconnections Breakdown -->
+        <div class="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+          <h4 class="font-bold text-slate-900 text-xs">Madden-Julian Oscillation (MJO) Analysis:</h4>
+          <p class="text-[11px] text-slate-600 leading-relaxed">
+            The MJO pulse is currently active in <strong>Phase 3 (Equatorial Indian Ocean)</strong> with amplitude ~1.1. This phase acts as a strong convective trigger, enhancing cyclonic vortex formation across the Bay of Bengal and pulses of rainfall along the Konkan-Goa coast.
+          </p>
+        </div>
+
+        <div class="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+          <h4 class="font-bold text-slate-900 text-xs">Regional Monsoon Cumulative Departure:</h4>
+          <div class="grid grid-cols-2 gap-2 text-[11px]">
+            <div class="p-2 bg-white rounded-xl border border-slate-200 flex items-center justify-between">
+              <span>South Peninsular India:</span>
+              <strong class="text-emerald-600 font-bold">+14% (Excess)</strong>
+            </div>
+            <div class="p-2 bg-white rounded-xl border border-slate-200 flex items-center justify-between">
+              <span>Central India Basin:</span>
+              <strong class="text-emerald-600 font-bold">+6% (Above Normal)</strong>
+            </div>
+            <div class="p-2 bg-white rounded-xl border border-slate-200 flex items-center justify-between">
+              <span>Northwest India:</span>
+              <strong class="text-blue-600 font-bold">-1% (Normal)</strong>
+            </div>
+            <div class="p-2 bg-white rounded-xl border border-slate-200 flex items-center justify-between">
+              <span>East & Northeast India:</span>
+              <strong class="text-amber-600 font-bold">-11% (Deficient)</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="p-3 bg-blue-50/70 border border-blue-200 rounded-2xl text-[11px] text-blue-900">
+          <strong>Climate Summary:</strong> Neutral ENSO transitioning toward La Niña and favorable equatorial wave activity indicate sustained reservoir recharge across Central and Peninsular India into late season.
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 7: Disaster Emergency Info Modal -->
+  <div id="modal-disaster" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-100 space-y-3">
+      <div class="flex items-center justify-between pb-2 border-b border-slate-100">
+        <h3 class="font-bold text-base text-slate-900">🛡️ National Disaster Emergency Numbers</h3>
+        <button class="modal-close text-slate-400 hover:text-slate-700" data-target="modal-disaster">✕</button>
+      </div>
+      <div class="grid grid-cols-2 gap-2 text-xs">
+        <div class="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
+          <span class="text-slate-400 block text-[10px]">NDRF Hotline</span>
+          <span class="font-bold text-slate-800 text-sm">1078</span>
+        </div>
+        <div class="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
+          <span class="text-slate-400 block text-[10px]">National Emergency</span>
+          <span class="font-bold text-slate-800 text-sm">112</span>
+        </div>
+        <div class="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
+          <span class="text-slate-400 block text-[10px]">IMD Weather Control</span>
+          <span class="font-bold text-slate-800 text-xs">011-24651234</span>
+        </div>
+        <div class="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
+          <span class="text-slate-400 block text-[10px]">State Disaster (SEOC)</span>
+          <span class="font-bold text-slate-800 text-sm">1070</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 8: Saved Locations Modal -->
+  <div id="modal-saved" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-100 space-y-4">
+      <div class="flex items-center justify-between pb-2 border-b border-slate-100">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-bookmark text-blue-600"></i>
+          <h3 class="font-bold text-base text-slate-900">Saved Locations</h3>
+        </div>
+        <button class="modal-close text-slate-400 hover:text-slate-700" data-target="modal-saved">✕</button>
+      </div>
+
+      <!-- Quick Bookmark Current Location -->
+      <button id="btn-save-current-location" class="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition shadow-sm">
+        <i class="fa-solid fa-star text-amber-300"></i>
+        <span>Bookmark Active Location</span>
+      </button>
+
+      <!-- Saved Locations List Container -->
+      <div id="saved-locations-list" class="space-y-2 max-h-64 overflow-y-auto pr-1 text-xs">
+        <!-- Injected dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 9: Supabase Authentication (Sign In / Sign Up / Forgot Password) -->
+  <div id="modal-auth" class="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-100 space-y-4">
+      <div class="flex items-center justify-between pb-2 border-b border-slate-100">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm">
+            <i class="fa-solid fa-lock"></i>
+          </div>
+          <div>
+            <h3 id="auth-title" class="font-bold text-base text-slate-900">Sign In to WeatherGPT</h3>
+            <p class="text-[11px] text-slate-400">Save chat history & bookmarks across devices</p>
+          </div>
+        </div>
+        <button class="modal-close text-slate-400 hover:text-slate-700" data-target="modal-auth">✕</button>
+      </div>
+
+      <!-- Auth Mode Tabs -->
+      <div class="flex bg-slate-100 p-1 rounded-xl text-xs font-semibold">
+        <button id="auth-tab-signin" class="flex-1 py-1.5 rounded-lg bg-white text-slate-900 shadow-sm transition">Sign In</button>
+        <button id="auth-tab-signup" class="flex-1 py-1.5 rounded-lg text-slate-500 hover:text-slate-900 transition">Sign Up</button>
+        <button id="auth-tab-forgot" class="flex-1 py-1.5 rounded-lg text-slate-500 hover:text-slate-900 transition">Reset</button>
+      </div>
+
+      <!-- Auth Alert / Error Message -->
+      <div id="auth-alert" class="hidden p-3 rounded-xl text-xs font-medium"></div>
+
+      <!-- Sign In Form -->
+      <form id="form-auth-signin" class="space-y-3">
+        <div>
+          <label class="block text-slate-700 text-xs font-medium mb-1">Email Address</label>
+          <input id="signin-email" type="email" required placeholder="name@example.com" class="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
+        </div>
+        <div>
+          <label class="block text-slate-700 text-xs font-medium mb-1">Password</label>
+          <input id="signin-password" type="password" required placeholder="••••••••" class="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
+        </div>
+        <button type="submit" id="btn-submit-signin" class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition shadow">Sign In</button>
+      </form>
+
+      <!-- Sign Up Form (Hidden by default) -->
+      <form id="form-auth-signup" class="space-y-3 hidden">
+        <div>
+          <label class="block text-slate-700 text-xs font-medium mb-1">Full Name</label>
+          <input id="signup-name" type="text" required placeholder="Your full name" class="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
+        </div>
+        <div>
+          <label class="block text-slate-700 text-xs font-medium mb-1">Email Address</label>
+          <input id="signup-email" type="email" required placeholder="name@example.com" class="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
+        </div>
+        <div>
+          <label class="block text-slate-700 text-xs font-medium mb-1">Create Password</label>
+          <input id="signup-password" type="password" required minlength="6" placeholder="At least 6 characters" class="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
+        </div>
+        <button type="submit" id="btn-submit-signup" class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition shadow">Create Free Account</button>
+      </form>
+
+      <!-- Forgot Password Form (Hidden by default) -->
+      <form id="form-auth-forgot" class="space-y-3 hidden">
+        <div>
+          <label class="block text-slate-700 text-xs font-medium mb-1">Account Email</label>
+          <input id="forgot-email" type="email" required placeholder="name@example.com" class="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
+        </div>
+        <button type="submit" id="btn-submit-forgot" class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition shadow">Send Password Reset Link</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal 10: User Feedback Modal -->
+  <div id="modal-feedback" class="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-100 space-y-4">
+      <div class="flex items-center justify-between pb-2 border-b border-slate-100">
+        <div class="flex items-center gap-2">
+          <i class="fa-regular fa-message text-blue-600 text-lg"></i>
+          <div>
+            <h3 class="font-bold text-base text-slate-900">User Feedback & Suggestions</h3>
+            <p class="text-[11px] text-slate-400">Help us improve IMD/MoES meteorological insights</p>
+          </div>
+        </div>
+        <button class="modal-close text-slate-400 hover:text-slate-700" data-target="modal-feedback">✕</button>
+      </div>
+
+      <div id="feedback-alert" class="hidden p-3 rounded-xl text-xs font-medium"></div>
+
+      <form id="form-feedback" class="space-y-3">
+        <div>
+          <label class="block text-slate-700 text-xs font-medium mb-1.5">Rating</label>
+          <div class="flex items-center gap-2" id="feedback-rating-stars">
+            <button type="button" class="star-btn text-xl text-amber-400" data-star="1">★</button>
+            <button type="button" class="star-btn text-xl text-amber-400" data-star="2">★</button>
+            <button type="button" class="star-btn text-xl text-amber-400" data-star="3">★</button>
+            <button type="button" class="star-btn text-xl text-amber-400" data-star="4">★</button>
+            <button type="button" class="star-btn text-xl text-amber-400" data-star="5">★</button>
+            <span id="feedback-rating-label" class="text-xs font-bold text-slate-600 ml-2">5 Stars</span>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-slate-700 text-xs font-medium mb-1">Category</label>
+          <select id="feedback-category" class="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-slate-700">
+            <option value="Accuracy">Forecast & Observation Accuracy</option>
+            <option value="Map">Satellite & Weather Map</option>
+            <option value="Alerts">Disaster & Cyclone Alerts</option>
+            <option value="UI">User Interface & Design</option>
+            <option value="Other">General Suggestion</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-slate-700 text-xs font-medium mb-1">Your Comments</label>
+          <textarea id="feedback-comment" rows="3" required placeholder="Share your experience, report an error, or suggest a new feature..." class="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-slate-700"></textarea>
+        </div>
+
+        <button type="submit" id="btn-submit-feedback" class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition shadow">Submit Feedback</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- In-Screen Delete Confirmation Modal (User Request) -->
+  <div id="modal-confirm-delete" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-sm w-full p-6 text-center animate-in fade-in zoom-in-95 duration-150">
+      <div class="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-4 text-xl shadow-sm">
+        <i class="fa-solid fa-trash-can"></i>
+      </div>
+      <h3 class="text-base font-bold text-slate-900 mb-1.5">Confirm Delete</h3>
+      <p id="confirm-delete-message" class="text-xs text-slate-600 mb-6 font-medium leading-relaxed">
+        Do you really want to delete this message?
+      </p>
+      <div class="flex items-center gap-3">
+        <button id="btn-cancel-delete" class="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-semibold transition active:scale-95">
+          No
+        </button>
+        <button id="btn-confirm-delete" class="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-xs font-semibold shadow-sm shadow-rose-600/30 transition">
+          Yes
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Supabase JS SDK v2 & Client -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./js/supabase_client.js"></script>
+
+  <!-- Client Application Scripts -->
+  <script src="./js/weather_ui.js?v=3.5"></script>
+  <script src="./js/alerts_ui.js?v=3.5"></script>
+  <script src="./js/map_controller.js?v=3.5"></script>
+  <script src="./js/app.js?v=3.5"></script>
+</body>
+</html>
