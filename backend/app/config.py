@@ -18,7 +18,7 @@ class Settings(BaseModel):
     DEBUG: bool = os.getenv("DEBUG", "False").lower() in ("true", "1", "t")
     
     HOST: str = os.getenv("HOST", "0.0.0.0")
-    PORT: int = int(os.getenv("PORT", "8000"))
+    PORT: int = int(os.getenv("PORT") or "8000")
     
     # SQLite Database URL
     DATABASE_URL: str = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / 'weathergpt.db'}")
