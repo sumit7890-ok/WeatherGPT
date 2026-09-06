@@ -55,16 +55,53 @@ class AIService:
 
     @staticmethod
     def is_greeting(message: str) -> bool:
-        """Detects if message is purely a greeting."""
-        clean = message.lower().strip(" !.,?👋\n\r")
+        """Detects if message is purely a greeting or conversational hello."""
+        clean = message.lower().strip(" !.,?👋\n\r~`'\"")
+        if not clean:
+            return False
+
         greeting_words = {
-            "hello", "hi", "hey", "namaste", "greetings", "good morning",
-            "good afternoon", "good evening", "hello weathergpt", "hi weathergpt",
-            "hey weathergpt", "who are you", "what can you do", "नमस्ते", "प्रणाम",
-            "নমস্কার", "হ্যালো", "কেমন আছো"
+            "hello", "hi", "hii", "hiii", "hiiii", "hey", "heyy", "heyyy", "helo", "helllo", "helloo",
+            "hiya", "howdy", "sup", "yo", "namaste", "namaskar", "pranam", "pranaam", "greetings",
+            "good morning", "good afternoon", "good evening", "good day", "how are you", "how r u",
+            "kemon acho", "kemon achen", "kemon achis", "kaise ho", "kya haal hai", "ki khobor",
+            "who are you", "what can you do", "what are you",
+            "নমস্কার", "হ্যালো", "হাই", "কেমন আছো", "কেমন আছেন", "কেমন আছিস", "কি খবর",
+            "শুভ সকাল", "শুভ সন্ধ্যা", "শুভ রাত্রি",
+            "नमस्ते", "नमस्कार", "प्रणाम", "राम राम", "जय श्री राम", "राधे राधे", "कैसा है", "कैसे हो", "क्या हाल है", "हेलो", "हाय"
         }
-        if clean in greeting_words or clean.startswith("hello ") or clean.startswith("hi ") or clean == "hi" or clean == "hey":
+        if clean in greeting_words:
             return True
+
+        # Check single and double character collapse (e.g. hiii -> hi, heyyy -> hey, hellooo -> hello)
+        norm_single = re.sub(r'([a-z])\1+', r'\1', clean)
+        if norm_single in greeting_words or (norm_single + 'o') in greeting_words:
+            return True
+        norm_double = re.sub(r'([a-z])\1+', r'\1\1', clean)
+        if norm_double in greeting_words:
+            return True
+
+        # Multi-word greeting check (e.g. "hi hello", "hello there", "hi weathergpt", "hello bro")
+        words = clean.split()
+        if words:
+            all_greet = True
+            for w in words:
+                w_c = re.sub(r'([a-z])\1+', r'\1', w)
+                w_d = re.sub(r'([a-z])\1+', r'\1\1', w)
+                if (w not in greeting_words and w_c not in greeting_words and 
+                    (w_c + 'o') not in greeting_words and w_d not in greeting_words and 
+                    w not in {'weathergpt', 'there', 'to', 'you', 'bro', 'friend', 'bot', 'all', 'everyone', 'sir', 'buddy'}):
+                    all_greet = False
+                    break
+            if all_greet:
+                return True
+
+        if clean.startswith(('hello ', 'hi ', 'hey ', 'greetings ', 'good morning ', 'good evening ', 'namaste ')):
+            # If the remainder after greeting is short conversational text or 'weathergpt'
+            remainder = clean.split(maxsplit=1)[1].strip() if ' ' in clean else ''
+            if not remainder or len(remainder) <= 15 or 'weathergpt' in remainder or remainder in {'there', 'bro', 'friend', 'sir', 'how are you', 'how r u'}:
+                return True
+
         if "weathergpt" in clean and len(clean.split()) <= 3:
             return True
         return False
@@ -425,29 +462,56 @@ class AIService:
                 desc = weather.weather_desc
                 hum = weather.humidity
                 wind = round(weather.wind_speed)
-                if language == "bn":
+
+                if AIService.is_greeting(message):
+                    if language == "bn":
+                        reply_text = (
+                            f"নমস্কার! 👋 আমি WeatherGPT, আপনার আবহাওয়া সহকারী। {city_name}-এ বর্তমান সরাসরি আবহাওয়া পর্যবেক্ষণ: "
+                            f"তাপমাত্রা {temp_round}°C (অনুভূত {feels_round}°C), আকাশ {desc}, "
+                            f"আর্দ্রতা {hum}% এবং বাতাস {wind} km/h। আজ আবহাওয়া বা পূর্বাভাস সম্পর্কিত কী জানতে চান?"
+                        )
+                    elif language == "hi":
+                        reply_text = (
+                            f"नमस्ते! 👋 मैं WeatherGPT हूँ, आपका मौसम सहायक। {city_name} में वर्तमान मौसम: "
+                            f"तापमान {temp_round}°C (महसूस {feels_round}°C), {desc}, "
+                            f"नमी {hum}% और हवा {wind} km/h है। आज मैं आपके मौसम संबंधी सवालों में क्या मदद करूँ?"
+                        )
+                    else:
+                        reply_text = (
+                            f"Hello! 👋 I'm WeatherGPT, your meteorological assistant. "
+                            f"Current observation in {city_name}: {temp_round}°C (feels like {feels_round}°C), {desc}, "
+                            f"with {hum}% humidity and wind at {wind} km/h. How can I assist you with the weather today?"
+                        )
+                else:
+                    if language == "bn":
+                        reply_text = (
+                            f"বর্তমানে এআই সংযোগে বিলম্ব হচ্ছে। {city_name}-র সরাসরি আবহাওয়া পর্যবেক্ষণ: "
+                            f"তাপমাত্রা {temp_round}°C (অনুভূত {feels_round}°C), আকাশ {desc}, "
+                            f"আর্দ্রতা {hum}% এবং বাতাস {wind} km/h।"
+                        )
+                    elif language == "hi":
+                        reply_text = (
+                            f"वर्तमान में एআই कनेक्शन में विलंब है। {city_name} का सीधा मौसम प्रेक्षण: "
+                            f"तापमान {temp_round}°C (महसूस {feels_round}°C), {desc}, "
+                            f"नमी {hum}% और हवा {wind} km/h है।"
+                        )
+                    else:
+                        reply_text = (
+                            f"AI service connection is currently delayed. Direct live observation for {city_name}: "
+                            f"{temp_round}°C (feels like {feels_round}°C), {desc}, "
+                            f"with {hum}% humidity and wind at {wind} km/h."
+                        )
+            else:
+                if AIService.is_greeting(message):
                     reply_text = (
-                        f"বর্তমানে এআই সংযোগে বিলম্ব হচ্ছে। {city_name}-র সরাসরি আবহাওয়া পর্যবেক্ষণ: "
-                        f"তাপমাত্রা {temp_round}°C (অনুভূত {feels_round}°C), আকাশ {desc}, "
-                        f"আর্দ্রতা {hum}% এবং বাতাস {wind} km/h।"
-                    )
-                elif language == "hi":
-                    reply_text = (
-                        f"वर्तमान में एआई कनेक्शन में विलंब है। {city_name} का सीधा मौसम प्रेक्षण: "
-                        f"तापमान {temp_round}°C (महसूस {feels_round}°C), {desc}, "
-                        f"नमी {hum}% और हवा {wind} km/h है।"
+                        "Hello! 👋 I'm WeatherGPT, your meteorological assistant. "
+                        "How can I assist you with weather forecasts or radar observations today?"
                     )
                 else:
                     reply_text = (
-                        f"AI service connection is currently delayed. Direct live observation for {city_name}: "
-                        f"{temp_round}°C (feels like {feels_round}°C), {desc}, "
-                        f"with {hum}% humidity and wind at {wind} km/h."
+                        "I am currently unable to retrieve weather intelligence for this location. "
+                        "Please verify your connection or select a location on the map."
                     )
-            else:
-                reply_text = (
-                    "I am currently unable to retrieve weather intelligence for this location. "
-                    "Please verify your connection or select a location on the map."
-                )
 
         suggestions = AIService._generate_dynamic_suggestions(city_name, weather, forecast, language)
         return reply_text, suggestions

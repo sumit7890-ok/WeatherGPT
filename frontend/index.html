@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <link rel="icon" type="image/png" href="/assets/Logo.png">
   <meta content="width=device-width, initial-scale=1.0" name="viewport">
   <title>WeatherGPT - Conversational AI for Weather & Climate Intelligence | MoES / IMD</title>
   <link rel="stylesheet" href="./css/style.css">
@@ -270,7 +271,7 @@
       <!-- Search input with autocomplete dropdown -->
       <div class="relative flex-1 max-w-md">
         <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
-        <input id="global-search" type="text" placeholder="Search location" class="w-full pl-9 pr-4 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 placeholder:text-slate-400">
+        <input id="global-search" type="text" placeholder="Search Locations..." autocomplete="off" class="w-full pl-9 pr-4 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 placeholder:text-slate-400">
         
         <!-- Search Autocomplete Dropdown -->
         <div id="search-autocomplete-dropdown" class="absolute top-full left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-2xl shadow-2xl max-h-[420px] overflow-y-auto z-50 hidden"></div>
@@ -1242,9 +1243,9 @@
   <script src="./js/supabase_client.js"></script>
 
   <!-- Client Application Scripts -->
-  <script src="./js/weather_ui.js?v=3.5"></script>
-  <script src="./js/alerts_ui.js?v=3.5"></script>
-  <script src="./js/map_controller.js?v=3.5"></script>
-  <script src="./js/app.js?v=3.5"></script>
+  <script src="./js/weather_ui.js?v=4.2"></script>
+  <script src="./js/alerts_ui.js?v=4.2"></script>
+  <script src="./js/map_controller.js?v=4.2"></script>
+  <script src="./js/app.js?v=4.2"></script>
 </body>
 </html>

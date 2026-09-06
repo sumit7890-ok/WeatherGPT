@@ -69,11 +69,26 @@ async function apiFetch(endpoint, options = {}, retries = 2) {
     for (const url of urlsToTry) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 9000);
-        const res = await fetch(url, { ...options, signal: controller.signal });
+        const timeoutId = setTimeout(() => controller.abort(), 12000);
+        let signal = controller.signal;
+        if (options.signal) {
+          if (options.signal.aborted) {
+            clearTimeout(timeoutId);
+            throw new DOMException("The user aborted a request.", "AbortError");
+          }
+          if (typeof AbortSignal !== "undefined" && AbortSignal.any) {
+            signal = AbortSignal.any([options.signal, controller.signal]);
+          } else {
+            options.signal.addEventListener("abort", () => controller.abort(), { once: true });
+          }
+        }
+        const res = await fetch(url, { ...options, signal });
         clearTimeout(timeoutId);
         if (res && res.ok) return res;
       } catch (err) {
+        if (err.name === "AbortError" && options.signal && options.signal.aborted) {
+          throw err;
+        }
         lastError = err;
       }
     }
@@ -271,6 +286,11 @@ class WeatherGPTApp {
     this.speechRecognition = null;
     this.currentUser = this.loadUserProfile();
     this.appearance = this.loadAppearance();
+    this.clientSearchCache = new Map();
+    this.searchAbortController = null;
+    this.isGenerating = false;
+    this.chatAbortController = null;
+    this.currentTypingId = null;
 
     this.initElements();
     this.initEvents();
@@ -989,14 +1009,21 @@ class WeatherGPTApp {
   }
 
   initEvents() {
-    // 1. Send Message on Click & Enter
+    // 1. Send / Cancel Message on Click & Enter
     if (this.btnSend) {
-      this.btnSend.addEventListener("click", () => this.handleSendMessage());
+      this.btnSend.addEventListener("click", () => {
+        if (this.isGenerating) {
+          this.cancelCurrentMessage();
+        } else {
+          this.handleSendMessage();
+        }
+      });
     }
     if (this.chatInput) {
       this.chatInput.addEventListener("keydown", (e) => {
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
+          if (this.isGenerating) return;
           this.handleSendMessage();
         }
       });
@@ -1042,9 +1069,16 @@ class WeatherGPTApp {
       });
     });
 
-    // 4. Global Search Autocomplete
+    // 4. Global Search Autocomplete (Matching Locations)
     let searchTimeout = null;
     if (this.globalSearch) {
+      this.globalSearch.addEventListener("focus", () => {
+        const q = (this.globalSearch.value || "").trim();
+        if (q.length >= 2) {
+          this.searchLocations(q);
+        }
+      });
+
       this.globalSearch.addEventListener("input", (e) => {
         clearTimeout(searchTimeout);
         const q = e.target.value.trim();
@@ -1052,11 +1086,11 @@ class WeatherGPTApp {
           if (this.searchDropdown) this.searchDropdown.classList.add("hidden");
           return;
         }
-        searchTimeout = setTimeout(() => this.searchLocations(q), 300);
+        searchTimeout = setTimeout(() => this.searchLocations(q), 120);
       });
 
       document.addEventListener("click", (e) => {
-        if (!this.globalSearch.contains(e.target) && this.searchDropdown) {
+        if (!this.globalSearch.contains(e.target) && this.searchDropdown && !this.searchDropdown.contains(e.target)) {
           this.searchDropdown.classList.add("hidden");
         }
       });
@@ -1279,10 +1313,56 @@ class WeatherGPTApp {
       console.warn("Reverse geocoding error:", e);
     }
 
-    // Direct OSM fallback if backend didn't return a granular name
-    if (!d || !d.name || d.name === "Selected Location") {
+    const isBad = (str) => !str || str === "Selected Location" || str === "Selected Place" || str.includes("Location (") || str.includes("Coordinates (");
+
+    // 2. Direct BigDataCloud client API fallback if backend returned nothing or generic coordinates
+    if (!d || !d.name || isBad(d.name)) {
       try {
-        const osmRes = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${parsedLat}&lon=${parsedLon}&format=json&zoom=18&addressdetails=1`, {
+        const bdcRes = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${parsedLat}&longitude=${parsedLon}&localityLanguage=en`);
+        if (bdcRes.ok) {
+          const bdc = await bdcRes.json();
+          const city = bdc.city || "";
+          const locality = bdc.locality || "";
+          const state = bdc.principalSubdivision || "";
+          const country = bdc.countryName || "";
+          let district = "";
+          if (bdc.localityInfo && Array.isArray(bdc.localityInfo.administrative)) {
+            for (const admin of bdc.localityInfo.administrative) {
+              const aname = admin.name || "";
+              if (aname.toLowerCase().includes("district") || aname.toLowerCase().includes("county")) {
+                district = aname.replace(/ district/i, "").replace(/ county/i, "");
+                break;
+              }
+            }
+          }
+          const primary = locality || city || district || state || country;
+          if (primary) {
+            const parts = [primary, city, district, state, country].filter((v, i, a) => v && a.indexOf(v) === i);
+            const formatted = parts.join(", ");
+            d = {
+              name: primary,
+              city: city || locality || primary,
+              locality: locality || city || primary,
+              sublocality: locality !== city ? locality : "",
+              district,
+              state,
+              country,
+              formattedAddress: formatted,
+              formatted,
+              latitude: parsedLat,
+              longitude: parsedLon
+            };
+          }
+        }
+      } catch (bdcErr) {
+        console.warn("Direct BDC client fallback error:", bdcErr);
+      }
+    }
+
+    // 3. Direct OSM fallback if still unresolved
+    if (!d || !d.name || isBad(d.name)) {
+      try {
+        const osmRes = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${parsedLat}&lon=${parsedLon}&format=json&zoom=18&addressdetails=1&accept-language=en`, {
           headers: { "Accept": "application/json" }
         });
         if (osmRes.ok) {
@@ -1292,7 +1372,8 @@ class WeatherGPTApp {
           const city = addr.city || addr.town || addr.municipality || addr.village || "";
           const district = addr.state_district || addr.county || addr.district || "";
           const state = addr.state || "";
-          const name = osmData.name || sublocality || addr.neighbourhood || city || district || "Local Area";
+          const country = addr.country || "";
+          const name = sublocality || addr.neighbourhood || city || district || state || country || coordStr;
           d = {
             name,
             sublocality,
@@ -1301,7 +1382,7 @@ class WeatherGPTApp {
             city,
             district,
             state,
-            country: addr.country || "India",
+            country,
             formattedAddress: osmData.display_name || name,
             formatted: osmData.display_name || name,
             latitude: parsedLat,
@@ -1313,9 +1394,8 @@ class WeatherGPTApp {
       }
     }
 
-    const isBad = (str) => !str || str === "Selected Location" || str === "Selected Place" || str.includes("Location (") || str.includes("Coordinates (");
-    const candidates = d ? [d.sublocality, d.neighborhood, d.locality, d.name, d.city, d.district] : [];
-    const resolvedName = candidates.find(x => !isBad(x)) || (d && d.name && !isBad(d.name) ? d.name : "Kolkata");
+    const candidates = d ? [d.sublocality, d.neighborhood, d.locality, d.name, d.city, d.district, d.state, d.country] : [];
+    const resolvedName = candidates.find(x => !isBad(x)) || (d && d.name && !isBad(d.name) ? d.name : coordStr);
 
     await this.setActiveLocation({
       ...(d || {}),
@@ -1331,6 +1411,9 @@ class WeatherGPTApp {
   }
 
   async triggerMapPlaceWeatherChat(cityName, formattedLabel, lat, lon) {
+    if (this.isGenerating) {
+      this.cancelCurrentMessage();
+    }
     const placeName = formattedLabel || cityName;
     if (this.welcomeBanner) this.welcomeBanner.classList.add("hidden");
 
@@ -1339,7 +1422,10 @@ class WeatherGPTApp {
     const userQuery = `Detailed weather and climate analysis for ${placeName}`;
     this.appendUserMessage(userQuery, timeStr);
 
-    const typingId = this.showTypingIndicator();
+    this.chatAbortController = new AbortController();
+    this.setChatGeneratingState(true);
+    this.currentTypingId = this.showTypingIndicator();
+
     try {
       const res = await apiFetch("/api/chat", {
         method: "POST",
@@ -1351,10 +1437,15 @@ class WeatherGPTApp {
           location: placeName,
           latitude: lat,
           longitude: lon
-        })
+        }),
+        signal: this.chatAbortController.signal
       });
 
-      this.removeTypingIndicator(typingId);
+      if (this.currentTypingId) {
+        this.removeTypingIndicator(this.currentTypingId);
+        this.currentTypingId = null;
+      }
+
       if (res && res.ok) {
         const data = await res.json();
         const resTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1368,8 +1459,19 @@ class WeatherGPTApp {
         this.appendAssistantMessage(`Unable to retrieve meteorological intelligence for ${placeName}.`, null, timeStr);
       }
     } catch (e) {
-      this.removeTypingIndicator(typingId);
+      if (this.currentTypingId) {
+        this.removeTypingIndicator(this.currentTypingId);
+        this.currentTypingId = null;
+      }
+      if (e.name === "AbortError" || (this.chatAbortController && this.chatAbortController.signal.aborted)) {
+        return;
+      }
       this.appendAssistantMessage("Network connection error. Please verify FastAPI backend is active.", null, timeStr);
+    } finally {
+      this.setChatGeneratingState(false);
+      this.chatAbortController = null;
+      this.currentTypingId = null;
+      if (this.chatInput) this.chatInput.focus();
     }
   }
 
@@ -1379,97 +1481,154 @@ class WeatherGPTApp {
   // ----------------------------------------------------
 
   async requestCurrentLocation(onSuccessCallback = null) {
-    if (!navigator.geolocation) {
-      this.showToast("⚠️ Geolocation is not supported by your browser.", "error");
-      const navLabel = document.getElementById("nav-city-label");
-      if (navLabel) navLabel.textContent = "";
-      this.openLocationSearch();
-      return;
-    }
-
     const navLabel = document.getElementById("nav-city-label");
     if (navLabel) {
-      navLabel.innerHTML = `<span class="text-blue-500 animate-pulse">Detecting location...</span>`;
+      navLabel.innerHTML = `<span class="text-blue-500 animate-pulse">Detecting live location...</span>`;
+    }
+    this.showToast("📍 Detecting your live location...", "info");
+
+    const resolveCoords = async (lat, lon, sourceLabel = "") => {
+      try {
+        let d = null;
+        try {
+          const res = await apiFetch(`/api/weather/reverse-geocode?lat=${lat}&lon=${lon}`);
+          if (res && res.ok) d = await res.json();
+        } catch {}
+
+        if (!d || !d.name || d.name === "Selected Location") {
+          try {
+            const bdcRes = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`);
+            if (bdcRes.ok) {
+              const bdc = await bdcRes.json();
+              const city = bdc.city || bdc.locality || "";
+              const state = bdc.principalSubdivision || "";
+              const country = bdc.countryName || "";
+              d = {
+                name: city || state || country,
+                city: city || state,
+                state,
+                country,
+                formattedAddress: [city, state, country].filter(Boolean).join(", "),
+                latitude: lat,
+                longitude: lon
+              };
+            }
+          } catch {}
+        }
+
+        const resolvedName = (d && d.name) || (d && d.city) || "Current Location";
+        const secondary = (d && (d.district || d.state || d.country)) || "";
+
+        await this.setActiveLocation({
+          ...(d || {}),
+          name: resolvedName,
+          city: (d && d.city) || resolvedName,
+          latitude: lat,
+          longitude: lon,
+          isCurrentLocation: true
+        });
+
+        this.showToast(`📍 Live Location: ${resolvedName}${secondary ? ', ' + secondary : ''}${sourceLabel}`, "success");
+        if (typeof onSuccessCallback === "function") {
+          onSuccessCallback(this.activeLocation);
+        }
+        return true;
+      } catch (err) {
+        console.error("Coordinate resolution failed:", err);
+        return false;
+      }
+    };
+
+    // IP Geolocation fallback for laptops where hardware GPS is unavailable or blocked
+    const fallbackToIPLocation = async (reason) => {
+      console.warn("Falling back to IP geolocation:", reason);
+      try {
+        const ipRes = await fetch("https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=en");
+        if (ipRes.ok) {
+          const data = await ipRes.json();
+          const lat = parseFloat(data.latitude);
+          const lon = parseFloat(data.longitude);
+          if (!isNaN(lat) && !isNaN(lon)) {
+            const city = data.city || data.locality || "";
+            const state = data.principalSubdivision || "";
+            const country = data.countryName || "";
+            const name = city || state || country || "Live Location";
+            await this.setActiveLocation({
+              name,
+              city: city || name,
+              state,
+              country,
+              latitude: lat,
+              longitude: lon,
+              formattedAddress: [city, state, country].filter(Boolean).join(", "),
+              isCurrentLocation: true
+            });
+            this.showToast(`📍 Live Location: ${name}${state ? ', ' + state : ''} (Network Detected)`, "success");
+            if (typeof onSuccessCallback === "function") {
+              onSuccessCallback(this.activeLocation);
+            }
+            return true;
+          }
+        }
+      } catch (e) {
+        console.warn("BigDataCloud IP detection failed, trying ipapi:", e);
+      }
+
+      try {
+        const ipapiRes = await fetch("https://ipapi.co/json/");
+        if (ipapiRes.ok) {
+          const data = await ipapiRes.json();
+          const lat = parseFloat(data.latitude);
+          const lon = parseFloat(data.longitude);
+          if (!isNaN(lat) && !isNaN(lon)) {
+            const city = data.city || "";
+            const state = data.region || "";
+            const country = data.country_name || "";
+            const name = city || state || country || "Live Location";
+            await this.setActiveLocation({
+              name,
+              city: city || name,
+              state,
+              country,
+              latitude: lat,
+              longitude: lon,
+              formattedAddress: [city, state, country].filter(Boolean).join(", "),
+              isCurrentLocation: true
+            });
+            this.showToast(`📍 Live Location: ${name}${state ? ', ' + state : ''} (Network Detected)`, "success");
+            if (typeof onSuccessCallback === "function") {
+              onSuccessCallback(this.activeLocation);
+            }
+            return true;
+          }
+        }
+      } catch (e) {
+        console.warn("Secondary IP detection failed:", e);
+      }
+
+      this.showToast("⚠️ Could not detect live location. Please search location manually.", "error");
+      return false;
+    };
+
+    if (!navigator.geolocation) {
+      await fallbackToIPLocation("Geolocation API unsupported");
+      return;
     }
 
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const lat = pos.coords.latitude;
         const lon = pos.coords.longitude;
-        try {
-          this.showToast("📍 Resolving authentic device coordinates...", "info");
-          const res = await apiFetch(`/api/weather/reverse-geocode?lat=${lat}&lon=${lon}`);
-          if (res && res.ok) {
-            const data = await res.json();
-            await this.setActiveLocation({
-              ...data,
-              latitude: lat,
-              longitude: lon,
-              isCurrentLocation: true
-            });
-            const displayName = data.sublocality || data.neighborhood || data.locality || data.name || data.city || "Current Location";
-            const secondary = data.district || data.state || data.country || "";
-            this.showToast(`📍 Current Location: ${displayName}${secondary ? ', ' + secondary : ''}`, "success");
-            if (typeof onSuccessCallback === "function") {
-              onSuccessCallback(this.activeLocation);
-            }
-            return;
-          }
-        } catch (err) {
-          console.error("Reverse geocoding error:", err);
-        }
-
-        await this.setActiveLocation({
-          name: "Current Location",
-          latitude: lat,
-          longitude: lon,
-          city: "Current Location",
-          isCurrentLocation: true
-        });
-        if (typeof onSuccessCallback === "function") {
-          onSuccessCallback(this.activeLocation);
-        }
+        await resolveCoords(lat, lon);
       },
-      (err) => {
-        console.warn("Geolocation denied or unavailable:", err);
-        // User request 6: Remove location label instantly if permission denied
-        const navLabel = document.getElementById("nav-city-label");
-        if (navLabel) {
-          navLabel.textContent = "";
-        }
-        try {
-          localStorage.removeItem("weathergpt_active_location");
-        } catch {}
-        this.activeLocation = {
-          name: null,
-          latitude: null,
-          longitude: null,
-          city: null,
-          state: null,
-          country: null,
-          district: null,
-          locality: null,
-          sublocality: null,
-          neighborhood: null,
-          postalCode: null,
-          placeId: null,
-          formattedAddress: null,
-          timezone: null,
-          isCurrentLocation: false
-        };
-        let msg = "Location permission was denied. Please search location manually.";
-        if (err.code === err.POSITION_UNAVAILABLE) {
-          msg = "Device location unavailable. Please search location manually.";
-        } else if (err.code === err.TIMEOUT) {
-          msg = "Location request timed out. Please search location manually.";
-        }
-        this.showToast(`⚠️ ${msg}`, "error");
-        this.openLocationSearch();
+      async (err) => {
+        console.warn("Browser GPS error, falling back to IP location:", err);
+        await fallbackToIPLocation(err.message || "GPS unavailable");
       },
       {
         enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 0
+        timeout: 5000,
+        maximumAge: 30000
       }
     );
   }
@@ -1557,10 +1716,7 @@ class WeatherGPTApp {
       }
     }
 
-    // 1.1 Update Search Input beside search icon to display clean place name (User Request 3)
-    if (this.globalSearch) {
-      this.globalSearch.value = primaryName;
-    }
+    // 1.1 Keep search input placeholder ("Search Locations...") visible; do not force place name into input value
 
     // 1.2 Update Card 1 city name next to Live clock (User Request 4)
     const cardCity = document.getElementById("card-city-name");
@@ -2215,119 +2371,218 @@ class WeatherGPTApp {
   }
 
   async searchLocations(query) {
+    if (!this.searchDropdown) return;
+    const cleanQ = (query || "").trim();
+    if (cleanQ.length < 2) {
+      this.searchDropdown.classList.add("hidden");
+      return;
+    }
+
+    const cacheKey = cleanQ.toLowerCase();
+
+    // 1. Instant Cache Hit (0ms response)
+    if (this.clientSearchCache && this.clientSearchCache.has(cacheKey)) {
+      const cachedItems = this.clientSearchCache.get(cacheKey);
+      this.renderSearchResults(cleanQ, cachedItems);
+      return;
+    }
+
+    // Cancel any previous in-flight request
+    if (this.searchAbortController) {
+      this.searchAbortController.abort();
+    }
+    this.searchAbortController = new AbortController();
+    const currentSignal = this.searchAbortController.signal;
+
+    // Instant searching feedback
+    this.searchDropdown.innerHTML = `
+      <div class="px-4 py-3 text-xs text-slate-500 flex items-center justify-center gap-2">
+        <i class="fa-solid fa-circle-notch fa-spin text-blue-600 text-xs"></i>
+        <span>Searching matching locations for "<strong>${this.escapeHTML(cleanQ)}</strong>"...</span>
+      </div>
+    `;
+    this.searchDropdown.classList.remove("hidden");
+
     try {
-      const res = await apiFetch(`/api/weather/search?q=${encodeURIComponent(query)}&include_weather=true&limit=8`);
-      if (res && res.ok) {
-        const items = await res.json();
-        if (!this.searchDropdown) return;
-        this.searchDropdown.innerHTML = "";
+      let items = null;
 
-        if (!items || items.length === 0) {
-          this.searchDropdown.innerHTML = `
-            <div class="px-4 py-3 text-xs text-slate-500 text-center">
-              No matching locations found for "<strong>${this.escapeHTML(query)}</strong>"
-            </div>
-          `;
-          this.searchDropdown.classList.remove("hidden");
-          return;
-        }
-
-        // Header Component
-        const headerEl = document.createElement("div");
-        headerEl.className = "px-4 py-2.5 bg-slate-50/95 backdrop-blur-xs border-b border-slate-200/80 sticky top-0 z-10";
-        headerEl.innerHTML = `
-          <div class="flex items-center justify-between">
-            <span class="text-[11px] font-bold tracking-wider text-slate-700 uppercase flex items-center gap-1.5">
-              <i class="fa-solid fa-layer-group text-blue-600 text-xs"></i>
-              MATCHING LOCATIONS (${items.length})
-            </span>
-          </div>
-          <p class="text-[11px] text-slate-400 mt-0.5">Showing all matching locations returned by the location service.</p>
-        `;
-        this.searchDropdown.appendChild(headerEl);
-
-        // Location Cards
-        items.forEach(loc => {
-          const card = document.createElement("div");
-          card.className = "p-3 hover:bg-blue-50/40 border-b border-slate-100 last:border-b-0 transition flex flex-col gap-2 cursor-pointer";
-
-          const primaryName = loc.name || loc.sublocality || loc.neighborhood || loc.locality || loc.city || "Location";
-          
-          const hierarchyParts = [];
-          if (loc.city && loc.city !== primaryName) hierarchyParts.push(loc.city);
-          if (loc.district && loc.district !== primaryName && loc.district !== loc.city) hierarchyParts.push(loc.district);
-          if (loc.state && loc.state !== primaryName && loc.state !== loc.city) hierarchyParts.push(loc.state);
-          if (loc.country) hierarchyParts.push(loc.country);
-          const secondaryText = hierarchyParts.length > 0 ? hierarchyParts.join(", ") : (loc.formattedAddress || "");
-
-          const latNum = parseFloat(loc.latitude != null ? loc.latitude : loc.lat) || 0;
-          const lonNum = parseFloat(loc.longitude != null ? loc.longitude : loc.lon) || 0;
-          const coordsText = `Lat: ${latNum.toFixed(4)}, Lon: ${lonNum.toFixed(4)}`;
-
-          let weatherBadgeHTML = "";
-          if (loc.weather) {
-            const temp = Math.round(loc.weather.temperature);
-            const feels = Math.round(loc.weather.feels_like);
-            const desc = loc.weather.weather_desc || "Clear";
-            const icon = loc.weather.weather_icon || "☀️";
-            const hum = loc.weather.humidity != null ? `${loc.weather.humidity}%` : "--";
-            const wind = loc.weather.wind_speed != null ? `${Math.round(loc.weather.wind_speed)} km/h` : "--";
-
-            weatherBadgeHTML = `
-              <div class="flex items-center justify-between bg-slate-50/90 rounded-xl px-2.5 py-1.5 border border-slate-200/60 text-[11px]">
-                <div class="flex items-center gap-1.5 text-slate-800 font-bold">
-                  <span class="text-sm">${icon}</span>
-                  <span>${temp}°C</span>
-                  <span class="text-slate-500 font-normal text-[10px]">• ${desc}</span>
-                </div>
-                <div class="flex items-center gap-2 text-[10px] text-slate-500">
-                  <span>Feels ${feels}°C</span>
-                  <span>• Hum ${hum}</span>
-                  <span>• Wind ${wind}</span>
-                </div>
-              </div>
-            `;
+      // 2. Primary: backend search with fast weather preview (strict 1.8s timeout)
+      try {
+        const tid = setTimeout(() => {
+          if (this.searchAbortController && !currentSignal.aborted) {
+            this.searchAbortController.abort();
           }
-
-          card.innerHTML = `
-            <div class="flex items-start justify-between gap-2.5">
-              <div class="min-w-0 flex-1">
-                <div class="font-bold text-slate-800 text-xs truncate flex items-center gap-1.5">
-                  <i class="fa-solid fa-location-dot text-blue-600 text-[11px] shrink-0"></i>
-                  <span class="truncate">${this.escapeHTML(primaryName)}</span>
-                </div>
-                <div class="text-slate-500 text-[11px] truncate mt-0.5">${this.escapeHTML(secondaryText)}</div>
-                <div class="text-slate-400 text-[10px] font-mono mt-0.5">${coordsText}</div>
-              </div>
-              <button class="btn-select-location px-3 py-1.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-[11px] font-semibold rounded-lg shrink-0 transition shadow-xs flex items-center gap-1">
-                Select
-              </button>
-            </div>
-            ${weatherBadgeHTML}
-          `;
-
-          const selectHandler = (e) => {
-            e.stopPropagation();
-            this.setActiveLocation({
-              ...loc,
-              isCurrentLocation: false
-            });
-            if (this.searchDropdown) this.searchDropdown.classList.add("hidden");
-            if (this.globalSearch) this.globalSearch.value = "";
-          };
-
-          card.addEventListener("click", selectHandler);
-          const btn = card.querySelector(".btn-select-location");
-          if (btn) btn.addEventListener("click", selectHandler);
-
-          this.searchDropdown.appendChild(card);
-        });
-
-        this.searchDropdown.classList.remove("hidden");
+        }, 1800);
+        const res = await fetch(`/api/weather/search?q=${encodeURIComponent(cleanQ)}&include_weather=true&limit=6`, { signal: currentSignal });
+        clearTimeout(tid);
+        if (res && res.ok) {
+          items = await res.json();
+        }
+      } catch (errW) {
+        if (errW.name !== "AbortError") {
+          console.warn("Search with weather timed out, trying fast search without weather:", errW);
+        }
       }
+
+      // 3. Fallback: fast search without weather if primary was slow
+      if (!items && !currentSignal.aborted) {
+        try {
+          const fastRes = await apiFetch(`/api/weather/search?q=${encodeURIComponent(cleanQ)}&include_weather=false&limit=6`);
+          if (fastRes && fastRes.ok) {
+            items = await fastRes.json();
+          }
+        } catch (errF) {
+          console.warn("Backend fast search failed:", errF);
+        }
+      }
+
+      // 3. Direct client OSM Nominatim fallback if backend unreachable
+      if (!items || items.length === 0) {
+        try {
+          const directRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQ)}&format=json&addressdetails=1&accept-language=en&limit=6`);
+          if (directRes.ok) {
+            const rawData = await directRes.json();
+            if (Array.isArray(rawData) && rawData.length > 0) {
+              items = rawData.map(it => {
+                const addr = it.address || {};
+                const name = it.name || addr.suburb || addr.city || addr.town || addr.state || cleanQ;
+                const parts = [name, addr.city || addr.town, addr.state, addr.country].filter(Boolean);
+                const uniqueParts = [...new Set(parts)];
+                return {
+                  name,
+                  city: addr.city || addr.town || name,
+                  state: addr.state || "",
+                  country: addr.country || "",
+                  latitude: parseFloat(it.lat),
+                  longitude: parseFloat(it.lon),
+                  formattedAddress: uniqueParts.join(", ")
+                };
+              });
+            }
+          }
+        } catch (nomErr) {
+          console.warn("Direct client Nominatim fallback failed:", nomErr);
+        }
+      }
+
+      if (items && items.length > 0) {
+        if (this.clientSearchCache) {
+          this.clientSearchCache.set(cacheKey, items);
+        }
+      }
+
+      this.renderSearchResults(cleanQ, items);
     } catch (e) {
       console.warn("Search fetch failed:", e);
     }
+  }
+
+  renderSearchResults(cleanQ, items) {
+    if (!this.searchDropdown) return;
+    this.searchDropdown.innerHTML = "";
+
+    if (!items || items.length === 0) {
+      this.searchDropdown.innerHTML = `
+        <div class="px-4 py-3 text-xs text-slate-500 text-center">
+          No matching locations found for "<strong>${this.escapeHTML(cleanQ)}</strong>"
+        </div>
+      `;
+      this.searchDropdown.classList.remove("hidden");
+      return;
+    }
+
+    // Header Component (Matching Pic 2)
+    const headerEl = document.createElement("div");
+    headerEl.className = "px-4 py-2.5 bg-slate-50/95 backdrop-blur-xs border-b border-slate-200/80 sticky top-0 z-10";
+    headerEl.innerHTML = `
+      <div class="flex items-center justify-between">
+        <span class="text-[11px] font-bold tracking-wider text-slate-700 uppercase flex items-center gap-1.5">
+          <i class="fa-solid fa-layer-group text-blue-600 text-xs"></i>
+          MATCHING LOCATIONS (${items.length})
+        </span>
+      </div>
+      <p class="text-[11px] text-slate-400 mt-0.5">Showing all matching locations returned by the location service.</p>
+    `;
+    this.searchDropdown.appendChild(headerEl);
+
+    // Location Cards
+    items.forEach(loc => {
+      const card = document.createElement("div");
+      card.className = "p-3 hover:bg-blue-50/40 border-b border-slate-100 last:border-b-0 transition flex flex-col gap-2 cursor-pointer";
+
+      const primaryName = loc.name || loc.sublocality || loc.neighborhood || loc.locality || loc.city || "Location";
+      
+      const hierarchyParts = [];
+      if (loc.city && loc.city !== primaryName) hierarchyParts.push(loc.city);
+      if (loc.district && loc.district !== primaryName && loc.district !== loc.city) hierarchyParts.push(loc.district);
+      if (loc.state && loc.state !== primaryName && loc.state !== loc.city) hierarchyParts.push(loc.state);
+      if (loc.country) hierarchyParts.push(loc.country);
+      const secondaryText = hierarchyParts.length > 0 ? hierarchyParts.join(", ") : (loc.formattedAddress || "");
+
+      const latNum = parseFloat(loc.latitude != null ? loc.latitude : loc.lat) || 0;
+      const lonNum = parseFloat(loc.longitude != null ? loc.longitude : loc.lon) || 0;
+      const coordsText = `Lat: ${latNum.toFixed(4)}, Lon: ${lonNum.toFixed(4)}`;
+
+      let weatherBadgeHTML = "";
+      if (loc.weather) {
+        const temp = Math.round(loc.weather.temperature);
+        const feels = Math.round(loc.weather.feels_like);
+        const desc = loc.weather.weather_desc || "Clear";
+        const icon = loc.weather.weather_icon || "☀️";
+        const hum = loc.weather.humidity != null ? `${loc.weather.humidity}%` : "--";
+        const wind = loc.weather.wind_speed != null ? `${Math.round(loc.weather.wind_speed)} km/h` : "--";
+
+        weatherBadgeHTML = `
+          <div class="flex items-center justify-between bg-slate-50/90 rounded-xl px-2.5 py-1.5 border border-slate-200/60 text-[11px]">
+            <div class="flex items-center gap-1.5 text-slate-800 font-bold">
+              <span class="text-sm">${icon}</span>
+              <span>${temp}°C</span>
+              <span class="text-slate-500 font-normal text-[10px]">• ${desc}</span>
+            </div>
+            <div class="flex items-center gap-2 text-[10px] text-slate-500">
+              <span>Feels ${feels}°C</span>
+              <span>• Hum ${hum}</span>
+              <span>• Wind ${wind}</span>
+            </div>
+          </div>
+        `;
+      }
+
+      card.innerHTML = `
+        <div class="flex items-start justify-between gap-2.5">
+          <div class="min-w-0 flex-1">
+            <div class="font-bold text-slate-800 text-xs truncate flex items-center gap-1.5">
+              <i class="fa-solid fa-location-dot text-blue-600 text-[11px] shrink-0"></i>
+              <span class="truncate">${this.escapeHTML(primaryName)}</span>
+            </div>
+            <div class="text-slate-500 text-[11px] truncate mt-0.5">${this.escapeHTML(secondaryText)}</div>
+            <div class="text-slate-400 text-[10px] font-mono mt-0.5">${coordsText}</div>
+          </div>
+          <button class="btn-select-location px-3 py-1.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-[11px] font-semibold rounded-lg shrink-0 transition shadow-xs flex items-center gap-1">
+            Select
+          </button>
+        </div>
+        ${weatherBadgeHTML}
+      `;
+
+      const selectHandler = (e) => {
+        e.stopPropagation();
+        this.setActiveLocation({
+          ...loc,
+          isCurrentLocation: false
+        });
+        if (this.searchDropdown) this.searchDropdown.classList.add("hidden");
+        if (this.globalSearch) this.globalSearch.value = "";
+      };
+
+      card.addEventListener("click", selectHandler);
+      const btn = card.querySelector(".btn-select-location");
+      if (btn) btn.addEventListener("click", selectHandler);
+
+      this.searchDropdown.appendChild(card);
+    });
+
+    this.searchDropdown.classList.remove("hidden");
   }
 
 
@@ -2500,7 +2755,64 @@ class WeatherGPTApp {
     this.loadRecentChats();
   }
 
+  setChatGeneratingState(isGenerating) {
+    this.isGenerating = !!isGenerating;
+    if (!this.btnSend) return;
+
+    if (this.isGenerating) {
+      // Turn into the Cancel / Stop generation button just like the user's uploaded image
+      this.btnSend.className = "h-9 w-9 p-0 rounded-full bg-[#1e2229] hover:bg-[#2d323b] active:scale-90 text-white flex items-center justify-center transition-all shadow-md border border-slate-700/80 cursor-pointer shrink-0";
+      this.btnSend.title = "Cancel / Stop generation";
+      this.btnSend.disabled = false;
+      this.btnSend.innerHTML = `
+        <span class="w-3.5 h-3.5 bg-[#e05a5a] rounded-[2.5px] block shadow-xs transition-transform hover:scale-110 pointer-events-none"></span>
+      `;
+    } else {
+      // Revert back to the standard Send button
+      const sendText = (typeof UI_TRANSLATIONS !== "undefined" && UI_TRANSLATIONS[this.currentLanguage]?.send_btn) || "Send";
+      this.btnSend.className = "h-9 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-medium text-sm flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer shrink-0";
+      this.btnSend.title = "Send Message";
+      this.btnSend.disabled = false;
+      this.btnSend.innerHTML = `
+        <span>${sendText}</span>
+        <i class="fa-regular fa-paper-plane text-xs"></i>
+      `;
+    }
+  }
+
+  cancelCurrentMessage() {
+    if (!this.isGenerating) return;
+
+    if (this.chatAbortController) {
+      try {
+        this.chatAbortController.abort();
+      } catch {}
+      this.chatAbortController = null;
+    }
+
+    if (this.currentTypingId) {
+      this.removeTypingIndicator(this.currentTypingId);
+      this.currentTypingId = null;
+    }
+
+    this.setChatGeneratingState(false);
+
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    this.appendAssistantMessage("*Message cancelled*", null, timeStr);
+    this.showToast("⏹️ Message cancelled", "info");
+
+    if (this.chatInput) {
+      this.chatInput.focus();
+    }
+  }
+
   async handleSendMessage() {
+    if (this.isGenerating) {
+      this.cancelCurrentMessage();
+      return;
+    }
+
     const text = this.chatInput ? this.chatInput.value.trim() : "";
     if (!text) return;
 
@@ -2512,10 +2824,14 @@ class WeatherGPTApp {
       const now = new Date();
       const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       this.appendUserMessage(text, timeStr);
-      const typingId = this.showTypingIndicator();
+      this.currentTypingId = this.showTypingIndicator();
+      this.setChatGeneratingState(true);
 
       this.requestCurrentLocation(async (resolvedLoc) => {
-        this.removeTypingIndicator(typingId);
+        if (this.currentTypingId) {
+          this.removeTypingIndicator(this.currentTypingId);
+          this.currentTypingId = null;
+        }
         await this.sendChatPayload(text, timeStr);
       });
       return;
@@ -2523,13 +2839,14 @@ class WeatherGPTApp {
 
     if (this.welcomeBanner) this.welcomeBanner.classList.add("hidden");
     if (this.chatInput) this.chatInput.value = "";
-    if (this.btnSend) this.btnSend.disabled = true;
 
     const now = new Date();
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     this.appendUserMessage(text, timeStr);
 
-    const typingId = this.showTypingIndicator();
+    this.chatAbortController = new AbortController();
+    this.setChatGeneratingState(true);
+    this.currentTypingId = this.showTypingIndicator();
 
     try {
       const locName = this.activeLocation.formattedAddress || 
@@ -2548,29 +2865,34 @@ class WeatherGPTApp {
           location: locName,
           latitude: this.activeLocation.latitude,
           longitude: this.activeLocation.longitude
-        })
+        }),
+        signal: this.chatAbortController.signal
       });
 
-      this.removeTypingIndicator(typingId);
+      if (this.currentTypingId) {
+        this.removeTypingIndicator(this.currentTypingId);
+        this.currentTypingId = null;
+      }
 
       if (res && res.ok) {
         const data = await res.json();
         const resTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         this.appendAssistantMessage(data.reply, data.weather, resTime, null, data.matching_locations);
 
-        // Immediate Map flyTo & active pin when any location is queried
-        if (data.weather && data.weather.latitude != null && data.weather.longitude != null) {
-          if (typeof MapController !== "undefined" && MapController.updateActiveLocation) {
-            MapController.updateActiveLocation(data.weather.latitude, data.weather.longitude, data.weather.city || "Active Location", false);
-          }
-
+        // Immediate Map flyTo & active pin when an explicit location is queried
+        const isGreeting = /^(hi+|he+y+|hello+|namaste|pranam|greetings|good\s+(morning|afternoon|evening|day)|how\s+are\s+you|kemon\s+acho|kaise\s+ho)\b/i.test(text.trim());
+        if (!isGreeting && data.weather && data.weather.latitude != null && data.weather.longitude != null) {
           const currentLat = this.activeLocation?.latitude;
           const currentLon = this.activeLocation?.longitude;
           const hasMoved = currentLat == null || currentLon == null ||
             Math.abs(data.weather.latitude - currentLat) > 0.005 ||
             Math.abs(data.weather.longitude - currentLon) > 0.005;
+          const cityChanged = data.weather.city && (!this.activeLocation || data.weather.city !== this.activeLocation.city);
 
-          if (hasMoved || (data.weather.city && (!this.activeLocation || data.weather.city !== this.activeLocation.city))) {
+          if (hasMoved || cityChanged) {
+            if (typeof MapController !== "undefined" && MapController.updateActiveLocation) {
+              MapController.updateActiveLocation(data.weather.latitude, data.weather.longitude, data.weather.city || "Active Location", false);
+            }
             await this.setActiveLocation({
               latitude: data.weather.latitude,
               longitude: data.weather.longitude,
@@ -2597,18 +2919,30 @@ class WeatherGPTApp {
         this.appendAssistantMessage("Sorry, I could not retrieve weather intelligence at this moment. Please try again.", null, timeStr);
       }
     } catch (e) {
-      this.removeTypingIndicator(typingId);
+      if (this.currentTypingId) {
+        this.removeTypingIndicator(this.currentTypingId);
+        this.currentTypingId = null;
+      }
+      if (e.name === "AbortError" || (this.chatAbortController && this.chatAbortController.signal.aborted)) {
+        // Already handled by cancelCurrentMessage
+        return;
+      }
       console.error("Chat API fetch failure:", e);
       this.appendAssistantMessage("Unable to connect to WeatherGPT server. Please verify FastAPI is active on port 8000.", null, timeStr);
     } finally {
-      if (this.btnSend) this.btnSend.disabled = false;
+      this.setChatGeneratingState(false);
+      this.chatAbortController = null;
+      this.currentTypingId = null;
       if (this.chatInput) this.chatInput.focus();
     }
   }
 
 
   async sendChatPayload(text, timeStr) {
-    const typingId = this.showTypingIndicator();
+    this.chatAbortController = new AbortController();
+    this.setChatGeneratingState(true);
+    this.currentTypingId = this.showTypingIndicator();
+
     try {
       const locName = this.activeLocation.formattedAddress || 
         [this.activeLocation.sublocality, this.activeLocation.locality, this.activeLocation.city, this.activeLocation.state].filter(Boolean).join(", ") || 
@@ -2626,28 +2960,34 @@ class WeatherGPTApp {
           location: locName,
           latitude: this.activeLocation.latitude,
           longitude: this.activeLocation.longitude
-        })
+        }),
+        signal: this.chatAbortController.signal
       });
 
-      this.removeTypingIndicator(typingId);
+      if (this.currentTypingId) {
+        this.removeTypingIndicator(this.currentTypingId);
+        this.currentTypingId = null;
+      }
+
       if (res && res.ok) {
         const data = await res.json();
         const resTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         this.appendAssistantMessage(data.reply, data.weather, resTime, null, data.matching_locations);
 
-        // Immediate Map flyTo & active pin when any location is queried
-        if (data.weather && data.weather.latitude != null && data.weather.longitude != null) {
-          if (typeof MapController !== "undefined" && MapController.updateActiveLocation) {
-            MapController.updateActiveLocation(data.weather.latitude, data.weather.longitude, data.weather.city || "Active Location", false);
-          }
-
+        // Immediate Map flyTo & active pin when an explicit location is queried
+        const isGreeting = /^(hi+|he+y+|hello+|namaste|pranam|greetings|good\s+(morning|afternoon|evening|day)|how\s+are\s+you|kemon\s+acho|kaise\s+ho)\b/i.test(text.trim());
+        if (!isGreeting && data.weather && data.weather.latitude != null && data.weather.longitude != null) {
           const currentLat = this.activeLocation?.latitude;
           const currentLon = this.activeLocation?.longitude;
           const hasMoved = currentLat == null || currentLon == null ||
             Math.abs(data.weather.latitude - currentLat) > 0.005 ||
             Math.abs(data.weather.longitude - currentLon) > 0.005;
+          const cityChanged = data.weather.city && (!this.activeLocation || data.weather.city !== this.activeLocation.city);
 
-          if (hasMoved || (data.weather.city && (!this.activeLocation || data.weather.city !== this.activeLocation.city))) {
+          if (hasMoved || cityChanged) {
+            if (typeof MapController !== "undefined" && MapController.updateActiveLocation) {
+              MapController.updateActiveLocation(data.weather.latitude, data.weather.longitude, data.weather.city || "Active Location", false);
+            }
             await this.setActiveLocation({
               latitude: data.weather.latitude,
               longitude: data.weather.longitude,
@@ -2666,8 +3006,19 @@ class WeatherGPTApp {
         this.appendAssistantMessage("Could not retrieve meteorological intelligence. Please try again.", null, timeStr);
       }
     } catch (e) {
-      this.removeTypingIndicator(typingId);
+      if (this.currentTypingId) {
+        this.removeTypingIndicator(this.currentTypingId);
+        this.currentTypingId = null;
+      }
+      if (e.name === "AbortError" || (this.chatAbortController && this.chatAbortController.signal.aborted)) {
+        return;
+      }
       this.appendAssistantMessage("Network connection error. Please verify FastAPI backend is active.", null, timeStr);
+    } finally {
+      this.setChatGeneratingState(false);
+      this.chatAbortController = null;
+      this.currentTypingId = null;
+      if (this.chatInput) this.chatInput.focus();
     }
   }
 

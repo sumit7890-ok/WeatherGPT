@@ -474,17 +474,34 @@ NON_LOCATION_WORDS = {
     "today", "tomorrow", "tonight", "yesterday", "now", "current", "currently", "morning",
     "afternoon", "evening", "night", "day", "days", "week", "weeks", "month", "months", "year", "years",
     "weekend", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-    # Conversational & general
-    "hello", "hi", "hey", "hola", "namaste", "thanks", "thank", "please", "yes", "no", "ok", "okay",
-    "good", "bad", "better", "best", "difference", "compare", "comparison", "right", "here", "there"
+    # Conversational, Greetings & general
+    "hello", "hi", "hii", "hiii", "hiiii", "hey", "heyy", "heyyy", "helo", "helllo", "helloo",
+    "hola", "namaste", "namaskar", "pranam", "pranaam", "greetings", "greeting", "howdy", "hiya", "sup", "yo",
+    "kemon", "acho", "achis", "achen", "kaise", "kya", "haal", "chal", "khobor", "bhalo",
+    "weathergpt", "gpt", "chatbot", "bot", "ai", "assistant",
+    "bro", "buddy", "friend", "sir", "mam", "madam", "dude", "mate",
+    "thanks", "thank", "thankyou", "please", "yes", "no", "ok", "okay",
+    "good", "bad", "better", "best", "difference", "compare", "comparison", "right", "here", "there",
+    "fine", "great", "cool", "awesome", "bye", "cya", "see", "ya"
 }
 
 def _is_valid_location_candidate(text: str) -> bool:
-    clean = text.lower().strip(" ?.,!;:()\"'")
+    clean = text.lower().strip(" ?.,!;:()\"'~`@#$%^&*-_+=/\\|")
     if not clean or len(clean) < 2:
         return False
+    if ai_service.is_greeting(clean):
+        return False
     words = clean.split()
-    meaningful_words = [w for w in words if w not in NON_LOCATION_WORDS]
+    meaningful_words = []
+    for w in words:
+        if w in NON_LOCATION_WORDS:
+            continue
+        w_c = re.sub(r'([a-z])\1+', r'\1', w)
+        w_d = re.sub(r'([a-z])\1+', r'\1\1', w)
+        if w_c in NON_LOCATION_WORDS or (w_c + "o") in NON_LOCATION_WORDS or w_d in NON_LOCATION_WORDS:
+            continue
+        meaningful_words.append(w)
+
     if not meaningful_words:
         return False
     if words[0] in {"what", "who", "where", "when", "why", "how", "which", "will", "would", "should", "could", "can", "is", "are", "do", "does", "did"}:
@@ -492,7 +509,10 @@ def _is_valid_location_candidate(text: str) -> bool:
     return True
 
 def _extract_candidate_from_text(text: str) -> Optional[str]:
-    lower = text.lower().strip(" ?.,!;:()\"'")
+    lower = text.lower().strip(" ?.,!;:()\"'~`")
+    if not lower or ai_service.is_greeting(lower):
+        return None
+
     p_prep = [
         r'(?:can you\s+|could you\s+|please\s+|help me\s+|i want to\s+)?(?:locate|show|find|point|view|open|pin|display|where is|navigate to|go to|take me to)\s+(?:me\s+)?(?:the\s+)?(?:location\s+of\s+|weather\s+of\s+|weather\s+in\s+|weather\s+at\s+|map\s+of\s+)?([a-zA-Z0-9\u0900-\u097F\u0980-\u09FF\s\-]+?)(?:\s+(?:on\s+map|on\s+the\s+map|in\s+map|map|weather|forecast|today|now|\?|\.|$)|$)',
         r'^([a-zA-Z0-9\u0900-\u097F\u0980-\u09FF\s\-]{2,30}?)\s+(?:map|location|coordinates|coords)$',
@@ -518,11 +538,11 @@ def _extract_candidate_from_text(text: str) -> Optional[str]:
     return None
 
 async def _resolve_city(city_query: str) -> Optional[tuple[str, float, float]]:
-    clean = city_query.lower().strip(" ?.,!;:()\"'")
-    if not clean or len(clean) < 2 or not _is_valid_location_candidate(clean):
+    clean = city_query.lower().strip(" ?.,!;:()\"'~`@#$%^&*-_+=/\\|")
+    if not clean or len(clean) < 2 or not _is_valid_location_candidate(clean) or ai_service.is_greeting(clean):
         return None
 
-    # 1. Exact match in KNOWN_GLOBAL_LOCATIONS
+    # 1. Exact match in KNOWN_GLOBAL_LOCATIONS or INDIAN_CITIES_COORDS
     if clean in KNOWN_GLOBAL_LOCATIONS:
         return KNOWN_GLOBAL_LOCATIONS[clean]
     if clean in INDIAN_CITIES_COORDS:
@@ -536,6 +556,10 @@ async def _resolve_city(city_query: str) -> Optional[tuple[str, float, float]]:
     if norm in INDIAN_CITIES_COORDS:
         d = INDIAN_CITIES_COORDS[norm]
         return d["name"], d["lat"], d["lon"]
+
+    # Protect against short acronyms/airport codes (e.g. 'hii' -> Lake Havasu City, 'lax', 'hel')
+    if len(clean) <= 3:
+        return None
 
     # 3. Fuzzy match against dictionary keys
     import difflib
@@ -563,7 +587,9 @@ async def _resolve_city(city_query: str) -> Optional[tuple[str, float, float]]:
 
 async def _extract_location_from_query(text: str) -> Optional[tuple[str, float, float]]:
     """Intelligent geographic extractor for any city, country, state, or locality."""
-    clean = text.lower().strip(" ?.,!;:()\"'")
+    clean = text.lower().strip(" ?.,!;:()\"'~`")
+    if not clean or ai_service.is_greeting(clean):
+        return None
 
     # 1. Preposition and intent patterns first (captures specific multi-word localities like 'salt lake sector 5')
     cand = _extract_candidate_from_text(text)
@@ -752,10 +778,11 @@ async def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(session)
 
-    # 2. Check for nearby institutions or matching locations queries first
-    nearby_req = _detect_nearby_institutions_query(req.message)
-    matching_req = _detect_matching_locations_query(req.message)
-    comp = _detect_comparison_query(req.message)
+    # 2. Check for greetings, nearby institutions, or matching locations queries
+    is_greeting_msg = ai_service.is_greeting(req.message)
+    nearby_req = None if is_greeting_msg else _detect_nearby_institutions_query(req.message)
+    matching_req = None if is_greeting_msg else _detect_matching_locations_query(req.message)
+    comp = None if is_greeting_msg else _detect_comparison_query(req.message)
 
     comparison_data = None
     matching_locations = None
@@ -878,36 +905,46 @@ async def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
         lon = req.longitude
         city_name = req.location
 
-        # If city is explicitly mentioned in message, prioritize that city
-        extracted = await _extract_location_from_query(req.message)
-        if extracted:
-            city_name, lat, lon = extracted
-        elif lat is not None and lon is not None:
-            # If city name is missing, placeholder, or coordinate string, reverse-geocode to authentic city
-            if not city_name or city_name.lower().strip() in ("current location", "my location", "here", "weather here", "near me") or "coords (" in city_name.lower() or "location (" in city_name.lower():
-                try:
-                    rg = await weather_service.reverse_geocode(lat, lon)
-                    city_name = rg.get("city") or rg.get("locality") or rg.get("state") or rg.get("country") or "Selected Region"
-                except Exception:
-                    city_name = "Selected Region"
+        if is_greeting_msg:
+            # Greetings ALWAYS retain active or default location (e.g. Kolkata)
+            if lat is None or lon is None:
+                lat = settings.DEFAULT_LAT
+                lon = settings.DEFAULT_LON
+            if not city_name or city_name.lower().strip() in ("current location", "my location", "here", "weather here", "near me"):
+                city_name = settings.DEFAULT_CITY
+            extracted = None
+        else:
+            # If city is explicitly mentioned in message, prioritize that city
+            extracted = await _extract_location_from_query(req.message)
+            if extracted:
+                city_name, lat, lon = extracted
+            elif lat is not None and lon is not None:
+                # If city name is missing, placeholder, or coordinate string, reverse-geocode to authentic city
+                if not city_name or city_name.lower().strip() in ("current location", "my location", "here", "weather here", "near me") or "coords (" in city_name.lower() or "location (" in city_name.lower():
+                    try:
+                        rg = await weather_service.reverse_geocode(lat, lon)
+                        city_name = rg.get("city") or rg.get("locality") or rg.get("state") or rg.get("country") or "Selected Region"
+                    except Exception:
+                        city_name = "Selected Region"
 
-        # Check if session has a recent location context if no explicit location was provided
-        if not extracted and (lat is None or lon is None or (abs(lat - settings.DEFAULT_LAT) < 0.001 and abs(lon - settings.DEFAULT_LON) < 0.001 and (not city_name or city_name.lower().strip() in ("kolkata", "kolkata, west bengal, india")))):
-            last_with_weather = (
-                db.query(ChatMessage)
-                .filter(ChatMessage.session_id == session_id, ChatMessage.weather_snapshot.isnot(None))
-                .order_by(ChatMessage.created_at.desc())
-                .first()
-            )
-            if last_with_weather and last_with_weather.weather_snapshot:
-                try:
-                    snap = json.loads(last_with_weather.weather_snapshot)
-                    if snap.get("latitude") and snap.get("longitude"):
-                        lat = float(snap["latitude"])
-                        lon = float(snap["longitude"])
-                        city_name = snap.get("city", city_name)
-                except Exception:
-                    pass
+            # Check if session has a recent location context if no explicit location was provided and it's a follow-up
+            if not extracted and not is_greeting_msg and (lat is None or lon is None or (abs(lat - settings.DEFAULT_LAT) < 0.001 and abs(lon - settings.DEFAULT_LON) < 0.001 and (not city_name or city_name.lower().strip() in ("kolkata", "kolkata, west bengal, india")))):
+                last_with_weather = (
+                    db.query(ChatMessage)
+                    .filter(ChatMessage.session_id == session_id, ChatMessage.weather_snapshot.isnot(None))
+                    .order_by(ChatMessage.created_at.desc())
+                    .first()
+                )
+                if last_with_weather and last_with_weather.weather_snapshot:
+                    try:
+                        snap = json.loads(last_with_weather.weather_snapshot)
+                        # Only reuse if valid coordinates and NOT an anomalous or foreign location if user asked a simple follow-up
+                        if snap.get("latitude") and snap.get("longitude"):
+                            lat = float(snap["latitude"])
+                            lon = float(snap["longitude"])
+                            city_name = snap.get("city", city_name)
+                    except Exception:
+                        pass
 
         # Fallback to default only if coordinates are completely absent
         if lat is None or lon is None:

@@ -98,11 +98,7 @@ const WeatherUI = {
     const cardCity = document.getElementById("card-city-name");
     if (cardCity) cardCity.textContent = cityName.split(",")[0].trim();
 
-    // 3. Search input beside search icon (User Request 3: Real place name)
-    const globalSearch = document.getElementById("global-search");
-    if (globalSearch && (!globalSearch.value || isCoordPattern(globalSearch.value))) {
-      globalSearch.value = cityName.split(",")[0].trim();
-    }
+    // 3. Search input: keep clean placeholder visible (Search Locations...), do not lock city value
 
     // 4. Update small coordinates tab at bottom of current weather platelet
     const lat = weather.latitude != null ? weather.latitude : (window.WeatherApp?.activeLocation?.latitude);
