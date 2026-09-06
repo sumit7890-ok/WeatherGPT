@@ -271,7 +271,7 @@ class AIService:
             }
         }
 
-        async with httpx.AsyncClient(timeout=6.5) as client:
+        async with httpx.AsyncClient(timeout=4.5) as client:
             for model_name in models:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={settings.GEMINI_API_KEY}"
                 try:
@@ -424,6 +424,10 @@ class AIService:
         aqi_keywords = ["aqi", "air quality", "pollution", "wind", "storm", "hawa", "বাতাস", "বায়ু", "प्रदूषण", "हवा"]
         is_aqi_query = any(k in msg_lower for k in aqi_keywords)
 
+        # Location / Pin / Map query check
+        locate_keywords = ["locate", "map", "pin", "center", "where is", "show me", "zoom to", "take me to", "অবস্থান", "মানচিত্র", "नक्शा", "कहाँ है"]
+        is_locate_query = any(k in msg_lower for k in locate_keywords)
+
         # Active Alert notice
         active_warning_str = ""
         if alerts and any(a.severity in ("RED", "ORANGE", "YELLOW") for a in alerts):
@@ -435,7 +439,24 @@ class AIService:
             else:
                 active_warning_str = f" ⚠️ Alert: {top_a.headline or top_a.hazard_type} is active."
 
-        # Case 1: Greeting
+        # Case 1: Map / Locate Location
+        if is_locate_query:
+            if lang == "bn":
+                return (
+                    f"আমি আপনার ইন্টারঅ্যাকটিভ মানচিত্রে {city_name} কেন্দ্র ও পিন করেছি। "
+                    f"নিকটবর্তী সরাসরি আবহাওয়া পর্যবেক্ষণ: তাপমাত্রা {t_c}°C (অনুভূত {fl_c}°C), আকাশ {desc}, আর্দ্রতা {hum}% এবং বাতাস {wind} km/h।{active_warning_str}"
+                )
+            elif lang == "hi":
+                return (
+                    f"मैंने आपके इंटरैक्टिव मानचित्र पर {city_name} को केंद्र और पिन कर दिया है। "
+                    f"यहाँ वर्तमान मौसम: तापमान {t_c}°C (महसूस {fl_c}°C), {desc}, नमी {hum}% और हवा {wind} km/h है।{active_warning_str}"
+                )
+            return (
+                f"I have centered and pinned {city_name} on your interactive map. "
+                f"Current conditions nearby show {desc} at {t_c}°C (feels like {fl_c}°C) with {hum}% humidity and winds at {wind} km/h.{active_warning_str}"
+            )
+
+        # Case 2: Greeting
         if AIService.is_greeting(user_message):
             if lang == "bn":
                 return (
@@ -634,10 +655,10 @@ class AIService:
                         chat_history=chat_history,
                         language=language
                     ),
-                    timeout=6.5
+                    timeout=4.5
                 )
             except asyncio.TimeoutError:
-                logger.warning("Gemini call timed out after 6.5s")
+                logger.warning("Gemini call timed out after 4.5s")
             except Exception as e:
                 logger.warning(f"Gemini call error: {e}")
 
