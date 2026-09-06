@@ -69,7 +69,7 @@ async function apiFetch(endpoint, options = {}, retries = 2) {
     for (const url of urlsToTry) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 12000);
+        const timeoutId = setTimeout(() => controller.abort(), 25000);
         let signal = controller.signal;
         if (options.signal) {
           if (options.signal.aborted) {
